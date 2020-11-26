@@ -1,5 +1,8 @@
+//TODO Move Curand to other kernel
+
 #include <curand_kernel.h>
 #include <assert.h>
+#include <iostream>
 
 struct gpu_density {
 	bool* odw;	
@@ -16,7 +19,9 @@ struct gpu_density {
 struct key_3d {
 	int x, y, z;
 	float value;
+	key_3d* next = nullptr;
 };
+
 
 struct gpu_settings {
 	float densityInfluence;
@@ -40,6 +45,42 @@ struct gpu_settings {
 	float maxTempHeatmap;
 };
 
+struct queue {
+	key_3d* head = nullptr;
+	key_3d* tail = nullptr;
+	int size = 0;
+};
+
+__device__ void queue_push(queue q, key_3d* elem) {
+	if(q.head == nullptr) {
+		q.head = elem;
+		q.tail = elem;
+		q.size = 1;
+	} else {
+		q.tail->next = elem;
+		q.tail = elem;
+		++(q.size);
+	}
+}
+
+__device__ key_3d queue_front(queue q) {
+	return *(q.tail);
+}
+
+__device__ void queue_pop(queue q) {
+	if(q.head == nullptr) {
+		return;
+	}
+	else if(q.head->next == nullptr){
+		q.head = nullptr;
+		q.tail = nullptr;
+		q.size = 0;
+	} else {
+		q.head = q.head->next;
+		--(q.size);
+	}
+}
+ 
 __device__ float vector3Length(float *vec) {
 	return sqrtf(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
 }
@@ -86,26 +127,28 @@ __device__ void addPointMass(gpu_density &d, const int &x,const int &y, const in
 		return;
 	}
 
-	queue<key_3d> q;
+	queue q;
 	key_3d p, np;
-	key_3d first = {x, y, z, val};
+	key_3d first = {x, y, z, val, nullptr};
     clearOdw(d);
     // TODO FIX QUEUE PROBLEM
-	q.push(first);
+	queue_push(q, &first);
 	setOdw(d, x, y, z, true);
-	while (q.size()) {
-		p = q.front();
-		q.pop();
+	while (q.size) {
+		p = queue_front(q);
+		queue_pop(q);
 		setT(d, p.x, p.y, p.z, max(getT(d, p.x, p.y, p.z), p.value));
+		#pragma unroll
 		for (int i=0; i<6; i++) {
 			np.x = p.x + d.dx[i];
 			np.y = p.y + d.dy[i];
 			np.z = p.z + d.dz[i];
 			np.value = p.value * settings.densityInfluence;
+			np.next = nullptr;
 
 			if (np.x >= 0 && np.y >= 0 && np.z >= 0 && np.x < d.size_x && np.y < d.size_y && np.z < d.size_z && np.value > 0.001f) {
 				if (!getOdw(d, np.x, np.y, np.z)) {
-					q.push(np);
+					queue_push(q, &np);
 					setOdw(d, np.x, np.y, np.z, true);
 				}
 			}
@@ -351,7 +394,7 @@ __device__ double calcScoreHeatmapActiveRegion(int moved, float* clusters_positi
 	size_t n = sizeof(active_region)/sizeof(active_region[0]);;
 	size_t hd_size = sizeof(heatmap_dist.v) / sizeof(heatmap_dist.v[0]);
 	size_t hcb_size = sizeof(gpu_heatmap_chromosome_boundaries) / sizeof(gpu_heatmap_chromosome_boundaries[0]);
-	if (hd_size != n) { printf("heatmap sizes mismatch, dist size=%zu, active region=%zu", hd_size, n); assert(0); }
+	if (hd_size != n) { printf("heatmap sizes mismatch, dist size=%zu, active region=%zu", hd_size, n); return 0.0; }
 	if (moved == -1) {
 		for (size_t i = 0; i < n; ++i) err += calcScoreHeatmapActiveRegion(i, clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, heatmap_dist);
 	}
@@ -514,7 +557,8 @@ __global__ void MonteCarloHeatmap(  float step_size,
 	int i, p, ind;
 	bool ok;
 	double score_prev, score_curr;		// global score (used to check if we can stop)
-	double score_density;
+	//TODO Density?
+	//double score_density;
 	double milestone_score;		// score measured every N steps, used to see whether the solution significantly improves
 	int success = 0;			// overall number of successes
 	int milestone_success = 0;	// calc how many successes there were since last milestone
@@ -525,7 +569,8 @@ __global__ void MonteCarloHeatmap(  float step_size,
 	initialize_density(density_curr, density, density_float, density_bool, idx_g);
 	// calc initial score
 	score_curr = calcScoreHeatmapActiveRegion(-1, local_clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, heatmap_dist);	// score from heatmap
-	score_density = calcScoreDensity(density, density_curr, active_region, local_clusters_positions, settings);
+	//TODO decide what's going to happen to this one
+	//score_density = calcScoreDensity(density, density_curr, active_region, local_clusters_positions, settings);
 	score_prev = score_curr;
 	milestone_score = score_curr;
 	int milestone_cnt = 0;
@@ -556,7 +601,8 @@ __global__ void MonteCarloHeatmap(  float step_size,
 		T *= settings.dtTempHeatmap;    // cooling
 		// check if we should stop
 		if (i % settings.MCstopConditionStepsHeatmap == 0) {
-			score_density = calcScoreDensity(density, density_curr, active_region, local_clusters_positions, settings);
+			//TODO another density to decide whether stays or goes away
+			//score_density = calcScoreDensity(density, density_curr, active_region, local_clusters_positions, settings);
 			// stop if the improvement since the last milestone is less than 0.5%, or if the score is too small (may happen when heatmap is small and points are perfectly arranged)
 			if ((score_curr > settings.MCstopConditionImprovementHeatmap * milestone_score &&
 					milestone_success < settings.MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
