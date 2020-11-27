@@ -68,7 +68,7 @@ public:
 
 	float getDiameter() const;
 	std::vector<float> getConsecutiveBeadDistances();
-	const float getAvgConsecutiveBeadDistance();	// avg distance between consecutive beads
+	float getAvgConsecutiveBeadDistance();	// avg distance between consecutive beads
 
 	float calcDistance(const Chromosome &chr);
 	float calcRMSD(const Chromosome &chr);

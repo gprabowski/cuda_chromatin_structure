@@ -64,13 +64,13 @@ bool Cluster::contains(int genomic_pos) {
 }
 
 void Cluster::toFile(FILE* file) {
-	fprintf(file, "%d %d %c %f %f %f %u", start, end, orientation, pos.x, pos.y, pos.z, children.size());
+	fprintf(file, "%d %d %c %f %f %f %lu", start, end, orientation, pos.x, pos.y, pos.z, children.size());
 	for (unsigned int i = 0; i < children.size(); ++i) fprintf(file, " %d", children[i]);
 	fprintf(file, "\n");
 }
 
 void Cluster::toFilePreviousFormat(FILE *file) {
-	fprintf(file, "%d %d %d %f %f %f %u", (start+end)/2, start, end, pos.x, pos.y, pos.z, children.size());
+	fprintf(file, "%d %d %d %f %f %f %lu", (start+end)/2, start, end, pos.x, pos.y, pos.z, children.size());
 	for (unsigned int i = 0; i < children.size(); ++i) fprintf(file, " %d", children[i]);
 	fprintf(file, "\n");
 }

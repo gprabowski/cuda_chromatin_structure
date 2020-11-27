@@ -36,7 +36,7 @@ public:
 	void fromFile(string filename, bool labels);
 	void fromMDS(string filename, int size);
 
-	const bool isEmpty();
+	bool isEmpty();
 	vector<bool> getEmpty();
 	Heatmap removeColumns(vector<bool> del);
 	Heatmap removeEmptyColumns();

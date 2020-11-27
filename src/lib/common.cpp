@@ -219,21 +219,21 @@ void printv(vector<bool> v) {
 
 void printv(const vector<int> &v, bool count, bool newline, const char* label) {
 	if (strlen(label) > 0) printf("%s: ", label);
-	if (count) printf("[total: %u] ", v.size());
+	if (count) printf("[total: %lu] ", v.size());
 	for (size_t i = 0; i < v.size(); ++i) printf(" %d", v[i]);
 	if (newline) printf("\n");
 }
 
 void printv(const vector<float> &v, bool count, bool newline, const char* label) {
 	if (strlen(label) > 0) printf("%s: ", label);
-	if (count) printf("[total: %u] ", v.size());
+	if (count) printf("[total: %lu] ", v.size());
 	for (size_t i = 0; i < v.size(); ++i) printf("%f ", v[i]);
 	if (newline) printf("\n");
 }
 
 void printv(const vector<string> &v, bool count, bool newline, const char* label) {
 	if (strlen(label) > 0) printf("%s: ", label);
-	if (count) printf("[total: %u] ", v.size());
+	if (count) printf("[total: %lu] ", v.size());
 	for (size_t i = 0; i < v.size(); ++i) printf("%s ", v[i].c_str());
 	if (newline) printf("\n");
 }
@@ -317,7 +317,7 @@ void saveToCSV(string path, vector<int> v, bool add_index_column) {
 	if (!f) return ;
 
 	for (size_t i = 0; i < v.size(); ++i) {
-		if (add_index_column) fprintf(f, "%d\t%d\n", i, v[i]);
+		if (add_index_column) fprintf(f, "%lu\t%d\n", i, v[i]);
 		else fprintf(f, "%d\n", v[i]);
 	}
 	fclose(f);
@@ -328,7 +328,7 @@ void saveToCSV(string path, vector<float> v, bool add_index_column) {
 	if (!f) return ;
 
 	for (size_t i = 0; i < v.size(); ++i) {
-		if (add_index_column) fprintf(f, "%d\t%f\n", i, v[i]);
+		if (add_index_column) fprintf(f, "%lu\t%f\n", i, v[i]);
 		else fprintf(f, "%f\n", v[i]);
 	}
 	fclose(f);
@@ -339,7 +339,7 @@ void saveToCSV(string path, vector<bool> v, bool add_index_column) {
 	if (!f) return ;
 
 	for (size_t i = 0; i < v.size(); ++i) {
-		if (add_index_column) fprintf(f, "%d\t%d\n", i, v[i] ? 1 : 0);
+		if (add_index_column) fprintf(f, "%lu\t%d\n", i, v[i] ? 1 : 0);
 		else fprintf(f, "%d\n", v[i] ? 1 : 0);
 	}
 	fclose(f);
@@ -352,7 +352,7 @@ void saveToCSV(string path, vector<vector<float> > v, bool add_index_column) {
 	if (v.size() == 0) return;
 
 	for (size_t j = 0; j < v[0].size(); ++j) { // rows
-		if (add_index_column) fprintf(f, "%d\t", j);
+		if (add_index_column) fprintf(f, "%lu\t", j);
 		for (size_t i = 0; i < v.size() - 1; ++i) {
 			fprintf(f, "%f\t", v[i][j]);
 		}
@@ -368,7 +368,7 @@ void saveToCSV(string path, vector<vector<int> > v, bool add_index_column) {
 	if (v.size() == 0) return;
 
 	for (size_t j = 0; j < v[0].size(); ++j) { // rows
-		if (add_index_column) fprintf(f, "%d\t", j);
+		if (add_index_column) fprintf(f, "%lu\t", j);
 		for (size_t i = 0; i < v.size() - 1; ++i) {
 			fprintf(f, "%d\t", v[i][j]);
 		}

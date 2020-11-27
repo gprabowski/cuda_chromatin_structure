@@ -14,7 +14,7 @@ ChromosomesSet::ChromosomesSet() {
 
 
 void ChromosomesSet::print() {
-	printf("Set size = %u\n", chromosome.size());
+	printf("Set size = %lu\n", chromosome.size());
 
 	for (size_t i = 0; i < chromosome.size(); ++i) {
 	//	printf("%d %s\n", chromosome[i].points.size(), desc[i].c_str());
@@ -48,12 +48,12 @@ void ChromosomesSet::toFile(string filename) {
 
 void ChromosomesSet::toFile(FILE* file) {
 	//printf("set = %d\n", chromosome.size());
-	fprintf(file, "%u\n", chromosome.size());
+	fprintf(file, "%lu\n", chromosome.size());
 	for (size_t i=0; i<chromosome.size(); i++) {
 		//fprintf(file, "%d\n%s\n", chromosome[i].points.size(), desc[i].c_str());
-		fprintf(file, "%u %s\n", chromosome[i].size(), desc[i].c_str());
+		fprintf(file, "%lu %s\n", chromosome[i].size(), desc[i].c_str());
 		for (auto el: chromosome[i]) {
-			fprintf(file, "%s %u\n", el.first.c_str(), el.second.points.size());
+			fprintf(file, "%s %lu\n", el.first.c_str(), el.second.points.size());
 			el.second.toFile(file);
 			//chromosome[i].toFile(file);
 		}

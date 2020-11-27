@@ -64,7 +64,7 @@ void get3DPositions(string input_structure, BedRegions &regions, string output_f
 
 	FILE *f = open(output_file, "w");
 	if (f == NULL) error("could not open the output file");
-	if (add_header) fprintf(f, "%d\n", regions.regions.size());
+	if (add_header) fprintf(f, "%lu\n", regions.regions.size());
 
 	for (uint i = 0; i < regions.regions.size(); i++) {
 		int p = (regions.regions[i].start+regions.regions[i].end) / 2;
@@ -637,7 +637,7 @@ int main(int argc, char** argv) {
 	//long int *tmp = NULL;
 	auto tmp =  chrono::high_resolution_clock::now().time_since_epoch().count();
 	srand((unsigned int)tmp);
-	printf("time = %ld\n", (unsigned int)tmp);
+	printf("time = %u\n", (unsigned int)tmp);
 
 	opterr = 0;
 	int opt = 0;

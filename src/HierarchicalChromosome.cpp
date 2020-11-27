@@ -412,7 +412,7 @@ void HierarchicalChromosome::toFilePreviousFormat(string filename) {
 	if (f == NULL) return;
 
 	string chr = chrs[0];
-	fprintf(f, "%u %u %d %u\n", clusters.size(), arcs.arcs[chr].size(), chr_root[chr], arcs.factors.size());
+	fprintf(f, "%lu %lu %d %lu\n", clusters.size(), arcs.arcs[chr].size(), chr_root[chr], arcs.factors.size());
 	//fprintf(f, "%lu %lu %d %lu\n", clusters.size(), arcs.arcs[chr].size(), root_index, arcs.factors.size());
 	for (unsigned int i = 0; i < arcs.factors.size(); ++i) fprintf(f, "%s ", arcs.factors[i].c_str());
 	fprintf(f, "\n");

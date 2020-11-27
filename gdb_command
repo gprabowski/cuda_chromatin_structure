@@ -1,0 +1,1 @@
+cuda-gdb -ex=r --args 3dnome -s ./stg.ini -c chr14 -o ./chr14/

@@ -53,10 +53,7 @@ void LooperSolver::print() {
 	printf("clusters\n");
 
 	for (size_t i = 0; i < clusters.size(); ++i) {
-		//double true_d = 0.0;
-		//if (i < clusters.size()-1) true_d = (clusters[i+1].pos - clusters[i].pos).length();
-		//printf("[%d] %lf ", i, true_d);
-		printf("[%d] ", i);
+		printf("[%lu] ", i);
 		clusters[i].print();
 	}
 	printf("\n");
@@ -75,7 +72,7 @@ void LooperSolver::initDensityData() {
 void LooperSolver::printActiveRegion() {
 	printf("*** active region: size = %d\n", (int)active_region.size());
 	for (size_t i = 0; i < active_region.size(); ++i) {
-		printf("[%d - %d] ", i, active_region[i]);
+		printf("[%lu - %d] ", i, active_region[i]);
 		if (i+1<active_region.size()) {
 			printf("(dist exp=%lf, true=%lf) ", clusters[active_region[i]].dist_to_next, (clusters[active_region[i]].pos-clusters[active_region[i+1]].pos).length() );
 		}
@@ -392,7 +389,6 @@ double LooperSolver::MonteCarloHeatmap(float step_size) {
 	bool ok;
 	double score_prev, score_curr;		// global score (used to check if we can stop)
 	double score_density;
-	double local_score_prev, local_score_curr;	// local score
 	double milestone_score;		// score measured every N steps, used to see whether the solution significantly improves
 	int success = 0;			// overall number of successes
 	int milestone_success = 0;	// calc how many successes there were since last milestone
@@ -421,16 +417,9 @@ double LooperSolver::MonteCarloHeatmap(float step_size) {
 
 		if (clusters[ind].is_fixed) continue;	// check if bead is fixed (for example telomere)
 
-		//local_score_prev = calcScoreHeatmapActiveRegion(p);
-
 		displacement = random_vector(step_size, Settings::use2D);	// generate random displacement vector
 		clusters[ind].pos += displacement;
-
-		//local_score_curr = calcScoreHeatmapActiveRegion(p);
-		//score_curr = score_curr + 2.0 * (local_score_curr - local_score_prev);	// calculate new global score
-
 		score_curr = calcScoreHeatmapActiveRegion();
-
 		ok = score_curr <= score_prev;
 
 		if (!ok && T > 0.0) {
@@ -440,8 +429,6 @@ double LooperSolver::MonteCarloHeatmap(float step_size) {
 		}
 
 		if (ok) {
-			//output(1, "dens score: %lf (density=%lf, T=%lf)\n", score_curr, score_density, T);
-
 			success++;
 			milestone_success++;
 		}
@@ -451,13 +438,10 @@ double LooperSolver::MonteCarloHeatmap(float step_size) {
 		}
 
 		T *= Settings::dtTempHeatmap;    // cooling
-
 		// check if we should stop
 		if (i % Settings::MCstopConditionStepsHeatmap == 0) {
-
 			score_density = calcScoreDensity();
 			//printf("milestone density score = %lf\n", score_density);
-
 			output(2, "milestone [%d]: score = %lf, last = %lf (%f), T=%lf successes = %d, last = %d  (den=%lf), step=%f\n", milestone_cnt, score_curr,
 					milestone_score, score_curr/milestone_score, T, success, milestone_success, score_density, step_size);
 
@@ -1644,7 +1628,7 @@ void LooperSolver::normalizeHeatmapInter(Heatmap &heat, float scale) {
 	std::vector<string> chrs_list = chrs;
 	chrs_list.push_back("end");
 
-	printf(" hmap size = %d\n", heat.size);
+	printf(" hmap size = %lu\n", heat.size);
 	printm(start_ind, chrs, true, true, "start indices");
 	printv(chrs_list, true, true, "chrs_list");
 
@@ -1663,7 +1647,7 @@ void LooperSolver::normalizeHeatmapDiagonalTotal(Heatmap &heat, float val) {
 	printf("normalize heatmap for near-diagonal total (%f)\n", val);
 
 	size_t diag = heat.getDiagonalSize();
-	printf(" diag size = %d\n", diag);
+	printf(" diag size = %lu\n", diag);
 
 	// calculate avg of first non-zero diagonal
 	double avg = 0.0;
@@ -1691,7 +1675,7 @@ float LooperSolver::getHeatmapAvgBetweenNeighboringRegions(Heatmap &heat, int le
 
 		vector<int> v;
 		v.push_back(0);
-		for (size_t i = 0; i < current_level[chr].size(); ++i) v.push_back(v[i] + clusters[current_level[chr][i]].children.size());
+		for (size_t l = 0; l < current_level[chr].size(); ++l) v.push_back(v[l] + clusters[current_level[chr][l]].children.size());
 		n = v.size();
 		printv(v, true, true, "hmap avg v");
 
@@ -2031,8 +2015,6 @@ void LooperSolver::repairDensityBoundary() {
 	vector3 pos;
 	vector3 shift = density.center - density.origin;
 	int px, py, pz;
-
-	bool found = false;
 	for (size_t i = 0; i < n; ++i) {
 
 		// find 3d density-coordinates for the current bead
@@ -2063,8 +2045,6 @@ void LooperSolver::repairDensityBoundary() {
 				//				printf("%d %d %d\n", px, py, pz);
 
 				clusters[active_region[i]].pos += shift;
-
-				found = true;
 			}
 			else break;
 		}

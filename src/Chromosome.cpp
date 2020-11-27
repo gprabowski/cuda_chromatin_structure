@@ -431,7 +431,7 @@ std::vector<float> Chromosome::getConsecutiveBeadDistances() {
 	return v;
 }
 
-const float Chromosome::getAvgConsecutiveBeadDistance() {
+float Chromosome::getAvgConsecutiveBeadDistance() {
 	float v = 0.0f;
 	for (int i = 0; i < size-1; ++i) {
 		v += (points[i] - points[i+1]).length();

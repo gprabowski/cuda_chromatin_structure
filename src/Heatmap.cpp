@@ -18,7 +18,7 @@ Heatmap::Heatmap(int size) {
 	init(size);
 }
 
-const bool Heatmap::isEmpty() {
+bool Heatmap::isEmpty() {
 	return size == 0;
 }
 
@@ -291,7 +291,7 @@ void Heatmap::add(float val) {
 
 void Heatmap::add(const Heatmap &heat) {
 	if (this->size != heat.size) {
-		printf("heatmaps have different sizes (%d, %d)!\n", this->size, heat.size);
+		printf("heatmaps have different sizes (%lu, %lu)!\n", this->size, heat.size);
 		exit(0);
 	}
 	for (size_t i = 0; i < size; ++i) {
@@ -305,7 +305,7 @@ Heatmap Heatmap::diff(const Heatmap &heat, bool abs) {
 	Heatmap h;
 
 	if (this->size != heat.size) {
-		printf("heatmaps have different sizes (%d, %d)!\n", this->size, heat.size);
+		printf("heatmaps have different sizes (%lu, %lu)!\n", this->size, heat.size);
 		return h;
 	}
 
@@ -323,7 +323,7 @@ Heatmap Heatmap::diff(const Heatmap &heat, bool abs) {
 
 void Heatmap::divide(const Heatmap &hmap) {
 	if (size != hmap.size) {
-		printf("heatmap divide: size mismatch (%d vs. %d)\n", size, hmap.size);
+		printf("heatmap divide: size mismatch (%lu vs. %lu)\n", size, hmap.size);
 		return;
 	}
 
@@ -362,7 +362,7 @@ void Heatmap::toFile(string filename, bool total_count, bool zero_diagonal, bool
 {
 	FILE *f = open(filename, "w");
 
-	if (total_count) fprintf(f, "%d\n", size);
+	if (total_count) fprintf(f, "%lu\n", size);
 	float val;
 	for (size_t i = 0; i < size; ++i) {
 		for (size_t l = 0; l < size; ++l) {

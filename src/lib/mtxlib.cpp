@@ -1817,25 +1817,27 @@ void vector4::fprint(FILE* file, char* str) const
 // Print a matrix33 to a file
 void matrix33::fprint(FILE* file, char * str) const 
 {
+  char t[] = "\t";
   fprintf(file, "%smatrix33:\n", str);
   vector3 row0(col[0][0], col[1][0], col[2][0]);
-  row0.fprint(file, "\t");
+  row0.fprint(file, t);
   vector3 row1(col[0][1], col[1][1], col[2][1]);
-  row1.fprint(file, "\t");
+  row1.fprint(file, t);
   vector3 row2(col[0][2], col[1][2], col[2][2]);
-  row2.fprint(file, "\t");
+  row2.fprint(file, t);
 }
 
 // Print a matrix44 to a file
 void matrix44::fprint(FILE* file, char* str) const 
 {
   fprintf(file, "%smatrix44:\n", str);
+  char t[] = "\t";
   vector4 row0(col[0][0], col[1][0], col[2][0], col[3][0]);
-  row0.fprint(file, "\t");
+  row0.fprint(file, t);
   vector4 row1(col[0][1], col[1][1], col[2][1], col[3][1]);
-  row1.fprint(file, "\t");
+  row1.fprint(file, t);
   vector4 row2(col[0][2], col[1][2], col[2][2], col[3][2]);
-  row2.fprint(file, "\t");
+  row2.fprint(file, t);
   vector4 row3(col[0][3], col[1][3], col[2][3], col[3][3]);
-  row3.fprint(file, "\t");
+  row3.fprint(file, t);
 }

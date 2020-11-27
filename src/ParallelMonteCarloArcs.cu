@@ -50,9 +50,9 @@ __device__ void randomVector(float *vector, float max_size, bool in2D, curandSta
 }
 
 __device__ void addToVector(float *destination, float *value) {
+    #pragma unroll
     for(int i = 0; i < 3; ++i) {
-        *destination += value[i];
-        ++destination;
+        destination[i] += value[i];
     }
 }
 
@@ -81,8 +81,6 @@ __device__ float calcScoreDistancesActiveRegion(
     const float & springConstantStretchArcs,
     const float & springConstantSqueezeArcs
 ) {
-    int threadIndex = blockIdx.x * blockDim.x + threadIdx.x;
-
 	float sc = 0.0, diff;
 	int st = active_region[cluster_moved];
     int n = sizeof(active_region) / sizeof(active_region[0]);
@@ -119,18 +117,18 @@ __global__ void MonteCarloArcsKernel(
     float * heatmap_exp_dist_anchor,
     int * milestone_successes,
     float * scores,
-    const float & T,
-    const int & N,
-    const float & score,
-    const float & tempJumpScale,
-    const float & tempJumpCoef,
-    const float & springConstantStretchArcs,
-    const float & springConstantSqueezeArcs,
-    const bool & use2D,
-    const int & numberOfParallelSimulations,
-    const int & step_size,
-    const int & numberOfClusters,
-    const int & activeRegionSize,
+    const float T,
+    const int N,
+    const float score,
+    const float tempJumpScale,
+    const float tempJumpCoef,
+    const float springConstantStretchArcs,
+    const float springConstantSqueezeArcs,
+    const bool use2D,
+    const int numberOfParallelSimulations,
+    const int step_size,
+    const int numberOfClusters,
+    const int activeRegionSize,
     bool * error
 ) {
     int threadIndex = blockIdx.x * blockDim.x + threadIdx.x;
@@ -155,7 +153,7 @@ __global__ void MonteCarloArcsKernel(
         if (clusters_fixed[ind]) *error = true;
         if(*error) return;
 
-        local_score_prev = calcScoreDistancesActiveRegion(p, active_region, &clusters_positions[threadIndex * numberOfClusters * 3], 
+        local_score_prev = calcScoreDistancesActiveRegion(p, active_region, &(clusters_positions[threadIndex * numberOfClusters * 3]), 
                                     heatmap_exp_dist_anchor, springConstantStretchArcs, springConstantSqueezeArcs);
 
         randomVector(tmp, step_size, use2D, &localState);
@@ -163,9 +161,9 @@ __global__ void MonteCarloArcsKernel(
         // explanation of indexing:
         // Each thread has its own dedicated state of the system, which consists of numberOfClusters elements.
         // Each element in the system is represented as 3d vector, so we need to stride by 3 array entries.
-        addToVector(&clusters_positions[threadIndex * numberOfClusters * 3 + ind * 3], tmp);
+        addToVector(clusters_positions + threadIndex * numberOfClusters * 3 + ind * 3, tmp);
 
-        local_score_curr = calcScoreDistancesActiveRegion(p, active_region, &clusters_positions[threadIndex * numberOfClusters * 3], 
+        local_score_curr = calcScoreDistancesActiveRegion(p, active_region, &(clusters_positions[threadIndex * numberOfClusters * 3]), 
                                     heatmap_exp_dist_anchor, springConstantStretchArcs, springConstantSqueezeArcs);
 
         score_curr = score_curr - local_score_prev + local_score_curr;
@@ -181,7 +179,7 @@ __global__ void MonteCarloArcsKernel(
             milestone_successes[threadIndex]++;
         } else {
             // if we reject move then move back and restore old score
-            subtractFromVector(&clusters_positions[threadIndex * numberOfClusters * 3 + ind * 3], tmp);
+            subtractFromVector(&(clusters_positions[threadIndex * numberOfClusters * 3 + ind * 3]), tmp);
             score_curr = score_prev;
         }
 
@@ -197,8 +195,8 @@ __global__ void setupKernel(curandState * state, time_t seed) {
 
 float LooperSolver::parallelMonteCarloArcs(float step_size) {
     const int N = 100;
-    const int blocks = 64;
-    const int threads = 256;
+    const int blocks = 32;
+    const int threads = 32;
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
     const int numberOfParallelSimulations = blocks * threads;
@@ -209,7 +207,7 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
 
     int iterations = 0;
 
-	float score_prev, score_curr;		// global score (used to check if we can stop)
+	float score_curr;		// global score (used to check if we can stop)
 	float milestone_score;		        // score measured every N steps, used to see whether the solution significantly improves
     int milestone_success = 0;	        // calc how many successes there were since last milestone
 
@@ -220,7 +218,6 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
 	// calculate total score
 	score_curr = calcScoreDistancesActiveRegion();
 
-	score_prev = score_curr;
     milestone_score = score_curr;
     size_t heatmapSize = heatmap_exp_dist_anchor.size;
     
@@ -251,7 +248,9 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
     thrust::device_vector<float> d_scores(numberOfParallelSimulations, 0.0);
 
     // TODO: make sure it's copying in the correct order
-    thrust::copy(&(heatmap_exp_dist_anchor.v[0][0]), &(heatmap_exp_dist_anchor.v[heatmapSize-1][heatmapSize-1]), d_heatmap_exp_dist_anchor.begin());
+    for(int i = 0; i < heatmapSize; ++i) {
+        thrust::copy(heatmap_exp_dist_anchor.v[i], heatmap_exp_dist_anchor.v[i] + heatmapSize, d_heatmap_exp_dist_anchor.begin() + heatmapSize * i);
+    }
     
     for(int i = 0; i < numberOfParallelSimulations; ++i) {
         thrust::copy(h_clusters_positions.begin(), h_clusters_positions.end(), d_clusters_positions.begin() + i * clusters.size() * 3);
@@ -293,9 +292,9 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
             d_hasError
         );
 
-        cudaDeviceSynchronize();
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
         cudaMemcpy(&h_hasError, d_hasError, sizeof(bool), cudaMemcpyDeviceToHost);
-        
         if(h_hasError) error("cluster fixed during arcs!\n");
 
         int resultIndex = thrust::min_element(thrust::device, d_scores.begin(), d_scores.end()) - d_scores.begin();
@@ -317,10 +316,10 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
 
         // TODO: make sure that Settings::MCstopConditionSteps is divisible by N
         // check if we should stop
-		if (iterations % Settings::MCstopConditionSteps == 0) {
+		if (iterations % (Settings::MCstopConditionSteps / 10) == 0) {
 			output(7, "milestone: score = %lf, last = %lf (%lf), T=%lf last = %d\n", score_curr, milestone_score,
 					score_curr/milestone_score, T, milestone_success);
-
+            printf("WORKS YO \n");
 			// stop if the improvement since the last milestone is less than threshold,
 			// or if the score is too small (may happen when heatmap is small and points are perfectly arranged)
 			if ((score_curr > Settings::MCstopConditionImprovement * milestone_score &&
@@ -336,7 +335,9 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
     for(int i = 0; i < clusters.size(); ++i) {
         for(int j = 0; j < 3; ++j) {
             clusters[i].pos[j] = h_clusters_positions[i * 3 + j];
+            printf(" %f ", clusters[i].pos[j]);
         }
+        printf("\n");
     }
 
     cudaFree(d_hasError);
