@@ -24,11 +24,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
    }
 }
 
-struct gpu_heatmap_dist {
-	int diagonal_size;
-    float** v;
-};
-
 struct gpu_settings {
 	float densityInfluence;
 	float densityScale;
@@ -36,7 +31,7 @@ struct gpu_settings {
 	double maxTempHeatmapDensity;
 	float dtTempHeatmapDensity;
 	float dtTempHeatmap;
-	double epsilon;
+	double eps;
 	float MCstopConditionImprovementHeatmapDensity;
 	float MCstopConditionImprovementHeatmap;
 	bool use2D;
@@ -44,10 +39,6 @@ struct gpu_settings {
 	float tempJumpCoefHeatmap;
 	float tempJumpScaleHeatmapDensity;
 	float tempJumpScaleHeatmap;
-	int MCstopConditionMinSuccessesHeatmapDensity;
-	int MCstopConditionMinSuccessesHeatmap;
-	int MCstopConditionStepsHeatmapDensity;
-	int MCstopConditionStepsHeatmap;
 	float maxTempHeatmap;
 };
 
@@ -102,62 +93,18 @@ __device__ float magnitude(float * vector) {
 
     for(int i = 0; i < 3; ++i) {
         sum += vector[i] * vector[i];
-    }struct gpu_heatmap_dist {
-        int diagonal_size;
-        float** v;
-    };
-    
-    struct gpu_settings {
-        float densityInfluence;
-        float densityScale;
-        float densityWeight;
-        double maxTempHeatmapDensity;
-        float dtTempHeatmapDensity;
-        float dtTempHeatmap;
-        double epsilon;
-        float MCstopConditionImprovementHeatmapDensity;
-        float MCstopConditionImprovementHeatmap;
-        bool use2D;
-        float tempJumpCoefHeatmapDensity;
-        float tempJumpCoefHeatmap;
-        float tempJumpScaleHeatmapDensity;
-        float tempJumpScaleHeatmap;
-        int MCstopConditionMinSuccessesHeatmapDensity;
-        int MCstopConditionMinSuccessesHeatmap;
-        int MCstopConditionStepsHeatmapDensity;
-        int MCstopConditionStepsHeatmap;
-        float maxTempHeatmap;
-    };
+    }
+    return sqrtf(sum);
+}
 
 //this function uses following external funcitonality / data
 // -> size of heatmap_chromosome_boundaries
 // -> the entire heatmap_chromosome_boundaries
-__device__ void getChromosomeHeatmapBostruct gpu_heatmap_dist {
-	int diagonal_size;
-    float** v;
-};
+__device__ void getChromosomeHeatmapBoundary(int p, int &start, int &end, int* gpu_heatmap_chromosome_boundaries, int chromosomeBoundariesSize) {
+	if (chromosomeBoundariesSize == 0) return;
+	if (p < 0 || p > gpu_heatmap_chromosome_boundaries[chromosomeBoundariesSize - 1]) return;
 
-struct gpu_settings {
-	float densityInfluence;
-	float densityScale;
-	float densityWeight;
-	double maxTempHeatmapDensity;
-	float dtTempHeatmapDensity;
-	float dtTempHeatmap;
-	double epsilon;
-	float MCstopConditionImprovementHeatmapDensity;
-	float MCstopConditionImprovementHeatmap;
-	bool use2D;
-	float tempJumpCoefHeatmapDensity;
-	float tempJumpCoefHeatmap;
-	float tempJumpScaleHeatmapDensity;
-	float tempJumpScaleHeatmap;
-	int MCstopConditionMinSuccessesHeatmapDensity;
-	int MCstopConditionMinSuccessesHeatmap;
-	int MCstopConditionStepsHeatmapDensity;
-	int MCstopConditionStepsHeatmap;
-	float maxTempHeatmap;
-}; ++i) {
+	for (size_t i = 0; i+1 < chromosomeBoundariesSize; ++i) {
 		if (gpu_heatmap_chromosome_boundaries[i] <= p && p < gpu_heatmap_chromosome_boundaries[i+1]) {
 			start = gpu_heatmap_chromosome_boundaries[i];
 			end = gpu_heatmap_chromosome_boundaries[i+1]-1;
@@ -178,30 +125,45 @@ struct gpu_settings {
 // getChromosomeBoundary
 // entire active region array
 // all positions from the clusters 
-__device__ double calcScoreHeatmapActiveRegion(int moved, float* clusters_positions, int* active_region, int* gpu_heatmap_chromosome_boundaries, const gpu_heatmap_dist &heatmap_dist) {
+__device__ double calcScoreHeatmapActiveRegion(
+    int moved, 
+    float* clusters_positions, 
+    int* active_region, 
+    int* gpu_heatmap_chromosome_boundaries, 
+    float * heatmap_dist,
+    int heatmapSize,
+    int heatmapDiagonalSize,
+    int activeRegionSize,
+    int chromosomeBoundariesSize
+) {
 	double err = 0.0, cerr;
 	float temp[3];
 	float d;
-	size_t n = sizeof(active_region)/sizeof(active_region[0]);;
-	size_t hd_size = sizeof(heatmap_dist.v) / sizeof(heatmap_dist.v[0]);
-	size_t hcb_size = sizeof(gpu_heatmap_chromosome_boundaries) / sizeof(gpu_heatmap_chromosome_boundaries[0]);
-	if (hd_size != n) { printf("heatmap sizes mismatch, dist size=%zu, active region=%zu", hd_size, n); return 0.0; }
+    size_t n = activeRegionSize;
+    
+	if (heatmapSize != n) { printf("heatmap sizes mismatch, dist size=%zu, active region=%zu", heatmapSize, n); return 0.0; }
 	if (moved == -1) {
-		for (size_t i = 0; i < n; ++i) err += calcScoreHeatmapActiveRegion(i, clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, heatmap_dist);
+        for (size_t i = 0; i < n; ++i) {
+            err += calcScoreHeatmapActiveRegion(i, clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, 
+                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize);
+        }
 	}
 	else {
 		int st = 0;
-		int end = n- 1;
-		if (hcb_size > 0) getChromosomeHeatmapBoundary(moved, st, end, gpu_heatmap_chromosome_boundaries);
+        int end = n - 1;
+        
+        if(chromosomeBoundariesSize > 0) {
+            getChromosomeHeatmapBoundary(moved, st, end, gpu_heatmap_chromosome_boundaries, chromosomeBoundariesSize);
+        }
 
 		for (int i = st; i <= end; ++i) {
-			if (abs(i-moved) >= heatmap_dist.diagonal_size) {
-                if (heatmap_dist.v[i][moved] < 1e-6) continue;	// ignore 0 values
+			if (abs(i-moved) >= heatmapDiagonalSize) {
+                if (heatmap_dist[i * heatmapSize + moved] < 1e-6) continue;	// ignore 0 values
                 const float* temp_one = clusters_positions + active_region[i] * 3;
                 const float* temp_two = clusters_positions + active_region[moved] * 3;
 				subtractFromVector3(temp, temp_one, temp_two);
-				d = vector3Length(temp);
-				cerr = (d - heatmap_dist.v[i][moved]) / heatmap_dist.v[i][moved];
+				d = magnitude(temp);
+				cerr = (d - heatmap_dist[i * heatmapSize + moved]) / heatmap_dist[i * heatmapSize + moved];
 				err += cerr * cerr;
 			}
 		}
@@ -483,6 +445,77 @@ float LooperSolver::parallelMonteCarloArcs(float step_size) {
     return score_curr;
 }
 
+__global__ void MonteCarloHeatmapKernel(
+	curandState * state,
+    int * active_region,
+    bool * clusters_fixed,
+	float * clusters_positions,
+	int * heatmap_chromosome_boundaries,
+	int * milestone_successes,
+	float * scores,
+	const float T,
+    const int N,
+    const float score,
+	gpu_settings settings,
+	float * heatmap_dist,
+	const int numberOfParallelSimulations,
+    const int step_size,
+    const int numberOfClusters,
+    const int activeRegionSize,
+    const int heatmapSize,
+    const int heatmapDiagonalSize,
+    const int chromosomeBoundariesSize,
+    bool * error
+) {
+	int threadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+    if(threadIndex >= numberOfParallelSimulations) return;
+
+	float tp = 0.0;
+	float displacement[3];
+	int p, ind;
+	bool ok;
+
+	float score_curr = score;
+	float score_prev = score_curr;
+
+	curandState localState = state[threadIndex];
+
+	float* local_clusters_positions = clusters_positions + threadIndex * 3 * numberOfClusters;
+
+	for(int i = 0; i < N; ++i) {
+		p = random(activeRegionSize, &localState);
+		ind = active_region[p];
+
+		if (clusters_fixed[ind]) *error = true;
+		if(*error) return;
+		
+		randomVector(displacement, step_size, settings.use2D, &localState);
+		addToVector(local_clusters_positions + ind * 3, displacement);
+
+        score_curr = calcScoreHeatmapActiveRegion(p, local_clusters_positions, active_region, heatmap_chromosome_boundaries, 
+                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize);
+		
+		ok = score_curr <= score_prev;
+
+		if (!ok && T > 0.0) {
+			tp = settings.tempJumpScaleHeatmap * expf(-settings.tempJumpCoefHeatmap * (score_curr/score_prev) / T);
+			ok = withChance(tp, &localState);
+		}
+
+		if (ok) {
+			milestone_successes[threadIndex]++;
+		}
+		else {
+			subtractFromVector(&(local_clusters_positions[ind * 3]), displacement);
+			score_curr = score_prev;
+		}
+	
+		score_prev = score_curr;
+	}
+	state[threadIndex] = localState;
+    scores[threadIndex] = score_curr;
+}
+
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 	step_size *= 0.5;
 
@@ -500,7 +533,8 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 	double milestone_score;		// score measured every N steps, used to see whether the solution significantly improves
 	int milestone_success = 0;	// calc how many successes there were since last milestone
 	string chr; 				// tmp variable to keep track to which chromosome a specific point belongs
-	int size = active_region.size();
+    int size = active_region.size();
+    int heatmapSize = heatmap_dist.size;
 
 	if (size <= 1) return 0.0;	// there is nothing to do
 
@@ -510,13 +544,18 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 	milestone_score = score_curr;
 
 	int milestone_cnt = 0;
-	int iterations = 1;
+	int iterations = 0;
 
 	bool * d_hasError;
     bool h_hasError;
 
     cudaMalloc((void**)&d_hasError, sizeof(bool));
-	cudaMemset(d_hasError, 0, sizeof(bool));
+    cudaMemset(d_hasError, 0, sizeof(bool));
+    
+    struct gpu_settings settings;
+    settings.tempJumpScaleHeatmap = Settings::tempJumpScaleHeatmap;
+    settings.tempJumpCoefHeatmap = Settings::tempJumpCoefHeatmap;
+    settings.use2D = Settings::use2D;
 	
 	thrust::host_vector<bool> h_clusters_fixed(clusters.size());
     thrust::host_vector<bool> h_clusters_positions(clusters.size() * 3); // just one initial state to copy across
@@ -532,12 +571,17 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     }
 
     thrust::device_vector<int> d_active_region(active_region);
+    thrust::device_vector<int> d_heatmap_chromosome_boundaries(heatmap_chromosome_boundaries);
     thrust::device_vector<bool> d_clusters_fixed = h_clusters_fixed;
     thrust::device_vector<float> d_clusters_positions(numberOfParallelSimulations * clusters.size() * 3);
 	thrust::device_vector<int> d_milestone_successes(numberOfParallelSimulations, 0); 
-	thrust::device_vector<float> d_scores(numberOfParallelSimulations, 0.0);
-	
-	// TODO: COPY HEATMAP DIST ARRAY
+    thrust::device_vector<float> d_scores(numberOfParallelSimulations, 0.0);
+    thrust::device_vector<float> d_heatmap_dist(heatmapSize * heatmapSize);
+
+    // TODO: make sure it's copying in the correct order
+    for(int i = 0; i < heatmapSize; ++i) {
+        thrust::copy(heatmap_dist.v[i], heatmap_dist.v[i] + heatmapSize, d_heatmap_dist.begin() + heatmapSize * i);
+    }
 
 	for(int i = 0; i < numberOfParallelSimulations; ++i) {
         thrust::copy(h_clusters_positions.begin(), h_clusters_positions.end(), d_clusters_positions.begin() + i * clusters.size() * 3);
@@ -556,25 +600,28 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 	output(2, "initial score: %lf (density=%lf)\n", score_curr, score_density);
 
 	while (true) {
-		MonteCarloHeatmap<<<blocks, threads>>>(
+		MonteCarloHeatmapKernel<<<blocks, threads>>>(
 			devStates,
 			thrust::raw_pointer_cast(d_active_region.data()),
             thrust::raw_pointer_cast(d_clusters_fixed.data()),
             thrust::raw_pointer_cast(d_clusters_positions.data()),
-            // TODO: gpu_heatmap_chromosome_boundaries
+            thrust::raw_pointer_cast(d_heatmap_chromosome_boundaries.data()),
             thrust::raw_pointer_cast(d_milestone_successes.data()),
             thrust::raw_pointer_cast(d_scores.data()),
 			T,
             N,
 			score_curr,
-			// gpu_settings
-			// TODO: heatmap_dist
+			settings,
+			thrust::raw_pointer_cast(d_heatmap_dist.data()),
 			numberOfParallelSimulations,
             step_size,
             clusters.size(),
             active_region.size(),
+            heatmapSize,
+            heatmap_dist.diagonal_size,
+            heatmap_chromosome_boundaries.size(),
             d_hasError
-		);
+        );
 
 		gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
@@ -629,71 +676,4 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 	cudaFree(devStates);
 	
 	return score_curr;
-}
-
-__global__ void MonteCarloHeatmap(
-	curandState * state,
-    int * active_region,
-    bool * clusters_fixed,
-	float * clusters_positions,
-	int * gpu_heatmap_chromosome_boundaries,
-	int * milestone_successes,
-	float * scores,
-	const float T,
-    const int N,
-    const float score,
-	gpu_settings settings,
-	gpu_heatmap_dist heatmap_dist,
-	const int numberOfParallelSimulations,
-    const int step_size,
-    const int numberOfClusters,
-    const int activeRegionSize,
-    bool * error
-) {
-	int threadIndex = blockIdx.x * blockDim.x + threadIdx.x;
-    if(threadIndex >= numberOfParallelSimulations) return;
-
-	float tp = 0.0;
-	float displacement[3];
-	int p, ind;
-	bool ok;
-
-	float score_curr = score;
-	float score_prev = score_curr;
-
-	curandState localState = state[threadIndex];
-
-	float* local_clusters_positions = clusters_positions + threadIndex * 3 * numberOfClusters;
-
-	for(int i = 0; i < N; ++i) {
-		p = random(cur_state, size);
-		ind = active_region[p];
-
-		if (clusters_fixed[ind]) *error = true;
-		if(*error) return;
-		
-		randomVector(displacement, step_size, settings.use2D, &localState);
-		addToVector(local_clusters_positions + ind * 3, displacement);
-
-		score_curr = calcScoreHeatmapActiveRegion(p, local_clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, heatmap_dist);
-		
-		ok = score_curr <= score_prev;
-
-		if (!ok && T > 0.0) {
-			tp = settings.tempJumpScaleHeatmap * expf(-settings.tempJumpCoefHeatmap * (score_curr/score_prev) / T);
-			ok = withChance(tp, &localState);
-		}
-
-		if (ok) {
-			milestone_successes[threadIndex]++;
-		}
-		else {
-			subtractFromVector(&(local_clusters_positions[ind * 3]), displacement);
-			score_curr = score_prev;
-		}
-	
-		score_prev = score_curr;
-	}
-	state[threadIndex] = localState;
-    scores[threadIndex] = score_curr;
 }

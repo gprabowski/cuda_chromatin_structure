@@ -351,6 +351,7 @@ void LooperSolver::reconstructClustersHeatmapSingleLevel(int level) {
 		}
 
 		output(2, "MC, heatmap, level %d, run %d/%d\n", level, k+1, steps);
+		// score = ParallelMonteCarloHeatmap(avg_dist);
 		score = MonteCarloHeatmap(avg_dist);
 		output(2, "score = %lf %lf\n", score, best_score);
 		if (Settings::useDensity) {
@@ -2498,8 +2499,8 @@ void LooperSolver::reconstructClusterArcsDistances(int cluster, int cluster_ind,
 		//}
 		//else
 
-		score = smooth ? MonteCarloArcsSmooth(noise_size, use_subanchor_heatmap) : parallelMonteCarloArcs(noise_size);
-		// score = smooth ? MonteCarloArcsSmooth(noise_size, use_subanchor_heatmap) : MonteCarloArcs(noise_size);
+		// score = smooth ? MonteCarloArcsSmooth(noise_size, use_subanchor_heatmap) : parallelMonteCarloArcs(noise_size);
+		score = smooth ? MonteCarloArcsSmooth(noise_size, use_subanchor_heatmap) : MonteCarloArcs(noise_size);
 
 		output(3, "score = %lf, best = %lf\n", score, best_score);
 
@@ -2672,6 +2673,8 @@ void LooperSolver::interpolateChildrenPositionSpline(std::vector<int> &regions, 
 
 double LooperSolver::MonteCarloArcs(float step_size) {
 
+	std::cout << "Arcs started\n";
+
 	double maxT = Settings::maxTemp;	  		// max temperature
 	double dt = Settings::dtTemp;				// change of temperature
 	double T = maxT;							// temperature
@@ -2760,6 +2763,9 @@ double LooperSolver::MonteCarloArcs(float step_size) {
 }
 
 double LooperSolver::MonteCarloArcsSmooth(float step_size, bool use_subanchor_heatmap) {
+
+	std::cout << "Arcs smooth started\n";
+
 
 	double maxT = Settings::maxTempSmooth;	  	// max temperature
 	double dt = Settings::dtTempSmooth;			// change of temperature
