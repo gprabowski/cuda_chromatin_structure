@@ -558,9 +558,9 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     settings.use2D = Settings::use2D;
 	
 	thrust::host_vector<bool> h_clusters_fixed(clusters.size());
-    thrust::host_vector<bool> h_clusters_positions(clusters.size() * 3); // just one initial state to copy across
+    thrust::host_vector<float> h_clusters_positions(clusters.size() * 3); // just one initial state to copy across
     thrust::host_vector<float> h_scores(numberOfParallelSimulations);
-	thrust::host_vector<int> h_milestone_successes(numberOfParallelSimulations);
+    thrust::host_vector<int> h_milestone_successes(numberOfParallelSimulations);
 
     for(int i = 0; i < clusters.size(); ++i) {
         h_clusters_fixed[i] = clusters[i].is_fixed;
@@ -656,7 +656,8 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 		if ((score_curr > Settings::MCstopConditionImprovementHeatmap * milestone_score &&
 				milestone_success < Settings::MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
 			break;
-		}
+        }
+        
 		milestone_score = score_curr;
         thrust::fill(d_milestone_successes.begin(), d_milestone_successes.end(), 0);
 		++milestone_cnt;
