@@ -645,23 +645,22 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 		T *= Settings::dtTempHeatmap;
 		iterations += N;
 
-		// check if we should stop
-		// make sure that Settings::MCstopConditionSteps is divisible by N
-		if (iterations % Settings::MCstopConditionStepsHeatmap == 0) {
-			score_density = calcScoreDensity();
-			//printf("milestone density score = %lf\n", score_density);
-			output(2, "milestone [%d]: score = %lf, last = %lf (%f), T=%lf last = %d  (den=%lf), step=%f\n", milestone_cnt, score_curr,
-					milestone_score, score_curr/milestone_score, T, milestone_success, score_density, step_size);
+        // check if we should stop
+        
+		score_density = calcScoreDensity();
+		//printf("milestone density score = %lf\n", score_density);
+		output(2, "milestone [%d]: score = %lf, last = %lf (%f), T=%lf last = %d  (den=%lf), step=%f\n", milestone_cnt, score_curr,
+				milestone_score, score_curr/milestone_score, T, milestone_success, score_density, step_size);
 
-			// stop if the improvement since the last milestone is less than 0.5%, or if the score is too small (may happen when heatmap is small and points are perfectly arranged)
-			if ((score_curr > Settings::MCstopConditionImprovementHeatmap * milestone_score &&
-					milestone_success < Settings::MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
-				break;
-			}
-			milestone_score = score_curr;
-            thrust::fill(d_milestone_successes.begin(), d_milestone_successes.end(), 0);
-			++milestone_cnt;
+		// stop if the improvement since the last milestone is less than 0.5%, or if the score is too small (may happen when heatmap is small and points are perfectly arranged)
+		if ((score_curr > Settings::MCstopConditionImprovementHeatmap * milestone_score &&
+				milestone_success < Settings::MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
+			break;
 		}
+		milestone_score = score_curr;
+        thrust::fill(d_milestone_successes.begin(), d_milestone_successes.end(), 0);
+		++milestone_cnt;
+		// }
 	}
 	// set best state to LooperSolver::clusters::pos
     thrust::copy(iterStart, iterEnd, h_clusters_positions.begin());
