@@ -149,7 +149,6 @@ __device__ double calcScoreHeatmapSingleActiveRegion(
     }
     return err;
 }
-
 //this function uses following
 //	-> size of the active region
 //	-> the whole active region array
