@@ -57,7 +57,7 @@ __device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) 
 					}
 				}
 			}
-			__syncthreads();
+			__syncwarp();
 		}
 	}	  
 }
@@ -68,6 +68,8 @@ __device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) 
 // 		is it even possible?
 // 3. optimize migration by utilizing more than one thread for data transfer
 // 4. Since we probably won't be able to fit more than 32 elements per block, we can use warp-level operations
+// 5. Can we do better with the calcScoreHeatmapActiveRegion function?
+// 6. We could utilize Tensor Cores for offspring calculations
 __global__ void geneticHeatmap(
 	curandState * state,
 	float * populationGlobal,
@@ -105,17 +107,20 @@ __global__ void geneticHeatmap(
 		population[threadIdx.x * clusterSize + i] = populationGlobal[threadIndex * clusterSize + i];
 	}
 
-	for(int i = 1; i < ITERATIONS; ++i) {
+	int i = 1;
 
+	while(true) {
 		localChromosome = &population[threadIdx.x * clusterSize];
 
 		// fitness evaluation
 		fitness[threadIdx.x] = calcScoreHeatmapActiveRegion(-1, localChromosome, heatmap_chromosome_boundaries, 
 			heatmap_dist, heatmapSize, heatmapDiagonalSize, clusterSize, chromosomeBoundariesSize);
 
-		__syncthreads();
+		__syncwarp();
 
-		// migration
+		if(i == ITERATIONS) break;
+
+		// MIGRATION - START
 		if(i % 100 == 0) {
 			bitonicSort(fitness, sortedIndices, ISLAND_SIZE);
 			
@@ -140,7 +145,7 @@ __global__ void geneticHeatmap(
 					}
 				}
 			}
-			__syncthreads();
+			__syncwarp();
 
 			localChromosome = &population[threadIdx.x * clusterSize];
 
@@ -148,20 +153,21 @@ __global__ void geneticHeatmap(
 			fitness[threadIdx.x] = calcScoreHeatmapActiveRegion(-1, localChromosome, heatmap_chromosome_boundaries, 
 				heatmap_dist, heatmapSize, heatmapDiagonalSize, clusterSize, chromosomeBoundariesSize);
 
-			__syncthreads();
+			__syncwarp();
 		}
+		// MIGRATION - END
 
 		// selection and crossover
 		crossoverIdx = curand(&localState) % ISLAND_SIZE;
 		selectedIndices[threadIdx.x] = fitness[threadIdx.x] > fitness[crossoverIdx] ? threadIdx.x : crossoverIdx;
 		weightsAndCrossover[threadIdx.x] = curand_uniform(&localState);
-		__syncthreads();
+		__syncwarp();
 
 		crossoverIdx = threadIdx.x % 2 == 0 ? threadIdx.x : threadIdx.x - 1;
 
 		if(weightsAndCrossover[crossoverIdx] < 0.7) {
 			a = weightsAndCrossover[crossoverIdx + 1];
-			crossoverIdx = threadIdx.x % 2 == 0 ? 1 : -1; // reuse the variable
+			crossoverIdx = threadIdx.x % 2 == 0 ? 1 : -1;  // reuse the variable
 
 			parent1 = &population[selectedIndices[threadIdx.x] * clusterSize];
 			parent2 = &population[selectedIndices[threadIdx.x + crossoverIdx] * clusterSize];
@@ -172,7 +178,7 @@ __global__ void geneticHeatmap(
 				tempChild[j] = a * parent1[j] + (1.0 - a) * parent2[j];
 			}
 		}
-		__syncthreads();
+		__syncwarp();
 		
 		// mutation and store back to shared memory
 		gauss = curand_normal(&localState);
@@ -182,11 +188,9 @@ __global__ void geneticHeatmap(
 			localChromosome[j] = tempChild[j];
 			if(mutationProbability < 0.05) localChromosome[j] += gauss;
 		}
-		__syncthreads();
+		__syncwarp();
+		++i;
 	}
-
-	// TODO: I think we should evaluate fitness once again, since we just created a new generation
-	// or we can simply move stop condition after first fitness evaluation in the loop
 
 	// after we finish, write population back to global memory
 	for(int i = 0; i < clusterSize; ++i) {
@@ -195,5 +199,7 @@ __global__ void geneticHeatmap(
 }
 
 float LooperSolver::ParallelGeneticHeatmap(float step_size) {
-    // TODO: initialize gpu data and launch kernel
+	// TODO: initialize gpu data and launch kernel
+	
+	
 }
