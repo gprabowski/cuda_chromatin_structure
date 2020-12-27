@@ -10,8 +10,10 @@
 
 #define ISLAND_SIZE 32
 #define ITERATIONS 1000
-
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+
+typedef __half FP16;
+
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {
    if (code != cudaSuccess) 
@@ -21,7 +23,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
    }
 }
 
-__device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) {
+__device__ void bitonicSort(FP16 *dev_values, ushort *indices, int islandSize) {
 	unsigned int i, ixj; /* Sorting partners: i and ixj */
 	int j, k; 
 
@@ -36,9 +38,9 @@ __device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) 
 			if ((ixj) > i) {
 				if ((i&k) == 0) {
 					/* Sort ascending */
-					if (dev_values[i] > dev_values[ixj]) {
+					if (__hgt(dev_values[i], dev_values[ixj])) {
 						/* exchange(i,ixj); */
-						float temp = dev_values[i];
+						FP16 temp = dev_values[i];
 						dev_values[i] = dev_values[ixj];
 						dev_values[ixj] = temp;
 						indices[i] = ixj;
@@ -47,9 +49,9 @@ __device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) 
 				}
 				if ((i&k) != 0) {
 					/* Sort descending */
-					if (dev_values[i] < dev_values[ixj]) {
+					if (__hgt(dev_values[ixj], dev_values[i])) {
 						/* exchange(i,ixj); */
-						float temp = dev_values[i];
+						FP16 temp = dev_values[i];
 						dev_values[i] = dev_values[ixj];
 						dev_values[ixj] = temp;
 						indices[i] = ixj;
@@ -63,7 +65,7 @@ __device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) 
 }
 
 // ACTION ITEMS:
-// 1. use FP16 to allow for 2x larger population in a block
+// 1. DONE - use FP16 to allow for 2x larger population in a block
 // 2. try doing crossover on one thread from each pair only (less barriers, but one thread idle)
 // 		is it even possible?
 // 3. optimize migration by utilizing more than one thread for data transfer
@@ -72,11 +74,11 @@ __device__ void bitonicSort(float *dev_values, ushort *indices, int islandSize) 
 // 6. We could utilize Tensor Cores for offspring calculations
 __global__ void geneticHeatmap(
 	curandState * state,
-	float * populationGlobal,
+	FP16 * populationGlobal,
 	int * heatmap_chromosome_boundaries,
 	int * milestone_successes,
-	float * heatmap_dist,
-	float * scores,
+	FP16 * heatmap_dist,
+	FP16 * scores,
 	gpu_settings settings,
     const int numberOfIslands,
 	const int clusterSize, // 3 * active region
@@ -88,18 +90,19 @@ __global__ void geneticHeatmap(
 	int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
 	if(threadIdx.x >= ISLAND_SIZE) return;
 
-	extern __shared__ float population[];
-	__shared__ float fitness[ISLAND_SIZE];
+	extern __shared__ FP16 population[];
+	__shared__ FP16 fitness[ISLAND_SIZE];
 	__shared__ ushort selectedIndices[ISLAND_SIZE];
-	__shared__ float weightsAndCrossover[ISLAND_SIZE];
+	__shared__ FP16 weightsAndCrossover[ISLAND_SIZE];
 	__shared__ ushort sortedIndices[ISLAND_SIZE];
 
-	float tempChild[3 * 200];
+	FP16 tempChild[3 * 200];
 
 	ushort crossoverIdx;
-	float *parent1, *parent2;
-	float *localChromosome;
-	float a, gauss, mutationProbability;
+	FP16 *parent1, *parent2;
+	FP16 *localChromosome;
+	FP16 a;
+	float gauss, mutationProbability;
 
 	curandState localState = state[threadIndex];
 
@@ -159,13 +162,13 @@ __global__ void geneticHeatmap(
 
 		// selection and crossover
 		crossoverIdx = curand(&localState) % ISLAND_SIZE;
-		selectedIndices[threadIdx.x] = fitness[threadIdx.x] > fitness[crossoverIdx] ? threadIdx.x : crossoverIdx;
-		weightsAndCrossover[threadIdx.x] = curand_uniform(&localState);
+		selectedIndices[threadIdx.x] = __hgt(fitness[threadIdx.x], fitness[crossoverIdx]) ? threadIdx.x : crossoverIdx;
+		weightsAndCrossover[threadIdx.x] = __float2half(curand_uniform(&localState));
 		__syncwarp();
 
 		crossoverIdx = threadIdx.x % 2 == 0 ? threadIdx.x : threadIdx.x - 1;
 
-		if(weightsAndCrossover[crossoverIdx] < 0.7) {
+		if(__hgt(__float2half(0.7), weightsAndCrossover[crossoverIdx]) {
 			a = weightsAndCrossover[crossoverIdx + 1];
 			crossoverIdx = threadIdx.x % 2 == 0 ? 1 : -1;  // reuse the variable
 
@@ -175,7 +178,7 @@ __global__ void geneticHeatmap(
 			for(int j = 0; j < clusterSize; ++j) {
 				// Offspring1 = a * Parent1 + (1- a) * Parent2
 				// Offspring2 = (1 - a) * Parent1 + a * Parent2
-				tempChild[j] = a * parent1[j] + (1.0 - a) * parent2[j];
+				tempChild[j] = __hadd(__hmul(a, parent1[j]), __hmul(__hsub(__float2half(1.0), a), parent2[j]));
 			}
 		}
 		__syncwarp();
@@ -186,7 +189,7 @@ __global__ void geneticHeatmap(
 
 		for(int j = 0; j < clusterSize; ++j) {
 			localChromosome[j] = tempChild[j];
-			if(mutationProbability < 0.05) localChromosome[j] += gauss;
+			if(mutationProbability < 0.05) localChromosome[j] = __hadd(localChromosome[j], __float2half(gauss));
 		}
 		__syncwarp();
 		++i;
@@ -201,5 +204,5 @@ __global__ void geneticHeatmap(
 float LooperSolver::ParallelGeneticHeatmap(float step_size) {
 	// TODO: initialize gpu data and launch kernel
 	
-	
+
 }
