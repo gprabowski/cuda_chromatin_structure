@@ -14,10 +14,14 @@
 
 typedef __half FP16;
 
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
-{
-   if (code != cudaSuccess) 
-   {
+typedef struct __align__(6) {
+	FP16 x;
+	FP16 y;
+	FP16 z;
+ } half3;
+
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true) {
+   if (code != cudaSuccess) {
       fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
       if (abort) exit(code);
    }
@@ -64,6 +68,32 @@ __device__ void bitonicSort(FP16 *dev_values, ushort *indices, int islandSize) {
 	}	  
 }
 
+__device__ FP16 calcScoreHeatmapActiveRegion(
+    int moved, 
+    FP16* clusters_positions, 
+    int* active_region, 
+    int* gpu_heatmap_chromosome_boundaries, 
+    FP16 * heatmap_dist,
+    int heatmapSize,
+    int heatmapDiagonalSize,
+    int activeRegionSize,
+    int chromosomeBoundariesSize
+) {
+    float err = 0.0;
+    size_t n = activeRegionSize;
+	if (moved == -1) {
+        for (size_t i = 0; i < n; ++i) {
+            err += calcScoreHeatmapSingleActiveRegion(i, clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, 
+                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize);
+        }
+	}
+	else {
+        err = calcScoreHeatmapSingleActiveRegion(moved, clusters_positions, active_region, gpu_heatmap_chromosome_boundaries, 
+                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize);
+	}
+	return __float2half(err);
+}
+
 // ACTION ITEMS:
 // 1. DONE - use FP16 to allow for 2x larger population in a block
 // 2. try doing crossover on one thread from each pair only (less barriers, but one thread idle)
@@ -72,16 +102,17 @@ __device__ void bitonicSort(FP16 *dev_values, ushort *indices, int islandSize) {
 // 4. Since we probably won't be able to fit more than 32 elements per block, we can use warp-level operations
 // 5. Can we do better with the calcScoreHeatmapActiveRegion function?
 // 6. We could utilize Tensor Cores for offspring calculations
+// 7. Test thrust reduction on the whole population vs local warp reductions => thrust on smaller load
+// 8. Test half3 struct vs flat 1D array of __half
 __global__ void geneticHeatmap(
 	curandState * state,
 	FP16 * populationGlobal,
 	int * heatmap_chromosome_boundaries,
-	int * milestone_successes,
 	FP16 * heatmap_dist,
 	FP16 * scores,
 	gpu_settings settings,
     const int numberOfIslands,
-	const int clusterSize, // 3 * active region
+	const int clusterSize,
 	const int migrationConstant,
     const int heatmapSize,
     const int heatmapDiagonalSize,
@@ -203,6 +234,114 @@ __global__ void geneticHeatmap(
 
 float LooperSolver::ParallelGeneticHeatmap(float step_size) {
 	// TODO: initialize gpu data and launch kernel
-	
 
+	const int N = 100;
+    const int blocks = 256;  // const int blocks = Settings::numberOfBlocks;
+	const int threads = 32;  // const int threads = Settings::numberOfThreads;
+    const int numberOfIndividuals = blocks * threads;
+
+	double score_curr;
+	double score_density;
+	double milestone_score;		// score measured every N steps, used to see whether the solution significantly improves
+	int milestone_success = 0;	// calc how many successes there were since last milestone
+	string chr; 				// tmp variable to keep track to which chromosome a specific point belongs
+    int size = active_region.size();
+    int heatmapSize = heatmap_dist.size;
+
+	if (size <= 1) return 0.0;	// there is nothing to do
+
+	// calc initial score
+	score_curr = calcScoreHeatmapActiveRegion();	// score from heatmap
+	score_density = calcScoreDensity();
+
+	bool * d_hasError;
+    bool h_hasError;
+
+    cudaMalloc((void**)&d_hasError, sizeof(bool));
+    cudaMemset(d_hasError, 0, sizeof(bool));
+    
+    struct gpu_settings settings;
+    settings.tempJumpScaleHeatmap = Settings::tempJumpScaleHeatmap;
+    settings.tempJumpCoefHeatmap = Settings::tempJumpCoefHeatmap;
+    settings.use2D = Settings::use2D;
+	
+	thrust::host_vector<bool> h_clusters_fixed(clusters.size());
+    thrust::host_vector<half3> h_clusters_positions(clusters.size()); // just one initial state to copy across
+    thrust::host_vector<float> h_scores(numberOfIndividuals);
+
+    for(int i = 0; i < clusters.size(); ++i) {
+        h_clusters_fixed[i] = clusters[i].is_fixed;
+        h_clusters_positions[i].x = __float2half(clusters[i].pos.x);
+        h_clusters_positions[i].y = __float2half(clusters[i].pos.y);
+        h_clusters_positions[i].z = __float2half(clusters[i].pos.z);
+    }
+
+    thrust::device_vector<int> d_active_region(active_region);
+    thrust::device_vector<int> d_heatmap_chromosome_boundaries(heatmap_chromosome_boundaries);
+    thrust::device_vector<bool> d_clusters_fixed = h_clusters_fixed;
+    thrust::device_vector<half3> d_clusters_positions(numberOfIndividuals * clusters.size());
+    thrust::device_vector<float> d_scores(numberOfIndividuals, 0.0);
+    thrust::device_vector<float> d_heatmap_dist(heatmapSize * heatmapSize);
+
+    // TODO: make sure it's copying in the correct order
+    for(int i = 0; i < heatmapSize; ++i) {
+        thrust::copy(heatmap_dist.v[i], heatmap_dist.v[i] + heatmapSize, d_heatmap_dist.begin() + heatmapSize * i);
+    }
+
+	for(int i = 0; i < numberOfIndividuals; ++i) {
+        thrust::copy(h_clusters_positions.begin(), h_clusters_positions.end(), d_clusters_positions.begin() + i * clusters.size());
+    }
+
+	curandState * devStates;
+	gpuErrchk(cudaMalloc((void**)&devStates, numberOfIndividuals * sizeof(curandState)));
+
+    // cuRand initialization
+	setupKernel<<<blocks, threads>>>(devStates, time(NULL));
+	gpuErrchk( cudaDeviceSynchronize() );
+
+	output(2, "initial score: %lf (density=%lf)\n", score_curr, score_density);
+
+	geneticHeatmap<<<blocks, threads>>>(
+		devStates, //curandState * state,
+		d_clusters_positions, //FP16 * populationGlobal,
+		d_heatmap_chromosome_boundaries, //int * heatmap_chromosome_boundaries,
+		d_heatmap_dist, //FP16 * heatmap_dist,
+		d_scores, //FP16 * scores,
+		gpu_settings, //gpu_settings settings,
+		blocks, //const int numberOfIslands,
+		const int clusterSize, // 3 * active region
+		const int migrationConstant,
+		const int heatmapSize,
+		const int heatmapDiagonalSize,
+		const int chromosomeBoundariesSize
+	);
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+
+	int resultIndex = thrust::min_element(thrust::device, d_scores.begin(), d_scores.end()) - d_scores.begin();
+
+	auto iterStart = d_clusters_positions.begin() + resultIndex * clusters.size();
+    auto iterEnd = d_clusters_positions.begin() + resultIndex * clusters.size() + clusters.size();
+
+    for(int i = 0; i < numberOfParallelSimulations; ++i) {
+        if(i == resultIndex) continue;
+        thrust::copy(iterStart, iterEnd, d_clusters_positions.begin() + i * clusters.size());
+	}
+
+	h_scores = d_scores;
+	float bestScore = h_scores[resultIndex];
+	
+	thrust::copy(iterStart, iterEnd, h_clusters_positions.begin());
+
+    for(int i = 0; i < clusters.size(); ++i) {
+        clusters[i].pos.x = h_clusters_positions[i].x;
+        clusters[i].pos.y = h_clusters_positions[i].y;
+        clusters[i].pos.z = h_clusters_positions[i].z;
+	}
+	
+	std::cout << "Score: " << bestScore << std::endl;
+
+	cudaFree(d_hasError);
+	cudaFree(devStates);
+	return bestScore;
 }
