@@ -6,7 +6,8 @@
  */
 
 #include "../include/LooperSolver.h"
-#include "ParallelMonteCarloArcs.cu"
+// #include "ParallelMonteCarloArcs.cu"
+#include "GeneticModeling.cu"
 
 LooperSolver::LooperSolver(string label, string outdir) {
 
@@ -333,25 +334,26 @@ void LooperSolver::reconstructClustersHeatmapSingleLevel(int level) {
 			clusters[active_region[i]].pos = initial_structure[i] + random_vector(avg_dist, Settings::use2D);
 		}
 
-		// if segment level and we have telomere positions
-		// TODO: currently works only if a single chromosome is used
-		if (level == LVL_SEGMENT && Settings::useTelomerePositions) {
+// 		// if segment level and we have telomere positions
+// 		// TODO: currently works only if a single chromosome is used
+// 		if (level == LVL_SEGMENT && Settings::useTelomerePositions) {
 
-//			print_vector(Settings::telomere_1_position, "tel 1 org");
-//			print_vector(densityCoordToStructure(Settings::telomere_1_position), "tel 1 tr");
-//
-//			print_vector(Settings::telomere_2_position, "tel 2 org");
-//			print_vector(densityCoordToStructure(Settings::telomere_2_position), "tel 2 tr");
+// //			print_vector(Settings::telomere_1_position, "tel 1 org");
+// //			print_vector(densityCoordToStructure(Settings::telomere_1_position), "tel 1 tr");
+// //
+// //			print_vector(Settings::telomere_2_position, "tel 2 org");
+// //			print_vector(densityCoordToStructure(Settings::telomere_2_position), "tel 2 tr");
 
-			clusters[active_region[0]].pos = densityCoordToStructure(Settings::telomere_1_position - density.origin);
-			clusters[active_region[0]].is_fixed = true;
-			int last = active_region.size()-1;
-			clusters[active_region[last]].pos = densityCoordToStructure(Settings::telomere_2_position - density.origin);
-			clusters[active_region[last]].is_fixed = true;
-		}
+// 			clusters[active_region[0]].pos = densityCoordToStructure(Settings::telomere_1_position - density.origin);
+// 			clusters[active_region[0]].is_fixed = true;
+// 			int last = active_region.size()-1;
+// 			clusters[active_region[last]].pos = densityCoordToStructure(Settings::telomere_2_position - density.origin);
+// 			clusters[active_region[last]].is_fixed = true;
+// 		}
 
 		output(2, "MC, heatmap, level %d, run %d/%d\n", level, k+1, steps);
-		score = ParallelMonteCarloHeatmap(avg_dist);
+		score = ParallelGeneticHeatmap();
+		// score = ParallelMonteCarloHeatmap(avg_dist);
 		// score = MonteCarloHeatmap(avg_dist);
 		output(2, "score = %lf %lf\n", score, best_score);
 		if (Settings::useDensity) {
