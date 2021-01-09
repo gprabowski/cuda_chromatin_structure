@@ -18,7 +18,7 @@ CC_LIBS=
 ## NVCC COMPILER OPTIONS ##
 
 NVCC=nvcc
-NVCC_FLAGS=--std c++17 -G -g -arch=sm_75 --use_fast_math
+NVCC_FLAGS=--std c++17 -arch=sm_75 --use_fast_math -g -G 
 NVCC_LIBS=
 
 # CUDA library directory:

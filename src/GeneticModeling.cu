@@ -14,6 +14,7 @@
 #include <time.h>
 #include <iostream>
 
+#include <stdio.h>
 #include "../include/LooperSolver.h"
 
 #define ITERATIONS 1000
@@ -55,8 +56,8 @@ __global__ void setupKernel(curandState * state, time_t seed) {
     curand_init(seed, tid, 0, &state[tid]);
 }
 
-__device__ void bitonicSort(__half *dev_values, ushort *indices, int islandSize) {
-	unsigned int i, ixj; /* Sorting partners: i and ixj */
+__device__ void bitonicSort(__half *dev_values, short *indices, int islandSize) {
+	int i, ixj; /* Sorting partners: i and ixj */
 	int j, k; 
 
   	i = threadIdx.x;
@@ -220,13 +221,12 @@ __global__ void geneticHeatmap(
 
 	extern __shared__ half3 population[];
 	__shared__ __half fitness[32];
-	__shared__ ushort selectedIndices[32];
+	__shared__ short selectedIndices[32];
 	__shared__ __half weightsAndCrossover[32];
-	__shared__ ushort sortedIndices[32];
+	__shared__ short sortedIndices[32];
 
 	half3 tempChild[200];
-
-	ushort crossoverIdx;
+	short crossoverIdx;
 	half3 *parent1;
 	half3 *parent2;
 	half3 *localChromosome;
@@ -305,8 +305,7 @@ __global__ void geneticHeatmap(
 
 			parent1 = &population[selectedIndices[threadIdx.x] * clusterSize];
 			// FIX - warp out of range here (happens only on threads with even id)
-			parent2 = &population[selectedIndices[threadIdx.x + crossoverIdx] * clusterSize];
-
+			parent2 = &population[selectedIndices[(int)threadIdx.x + crossoverIdx] * clusterSize];
 			__half oneMinusA_fp16 = __hsub(__float2half(1.0), a);
 
 			for(int j = 0; j < clusterSize; ++j) {
