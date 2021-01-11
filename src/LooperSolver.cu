@@ -330,7 +330,7 @@ void LooperSolver::reconstructClustersHeatmapSingleLevel(int level) {
 
 		// random initial position (use initial_structure and add some noise)
 		for (size_t i = 0; i < active_region.size(); ++i) {
-			clusters[active_region[i]].pos = initial_structure[i] + random_vector(avg_dist, Settings::use2D);
+			clusters[active_region[i]].pos = initial_structure[i] + random_vector(avg_dist, Settings::use2D) ;
 		}
 
 		// if segment level and we have telomere positions

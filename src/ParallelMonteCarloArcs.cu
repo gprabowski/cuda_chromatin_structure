@@ -49,6 +49,19 @@ struct __align__(8) half3{
     __half z;
 };
 
+__device__ void mutex_lock(unsigned int *mutex) {
+    unsigned int ns = 10;
+    while (atomicCAS(mutex, 0, 1) == 1) {
+        __nanosleep(ns);
+        if (ns < 256) {
+        ns *= 2;
+        }
+    }
+}
+
+__device__ void mutex_unlock(unsigned int *mutex) {
+    atomicExch(mutex, 0);
+}
 
 __device__ int random(int range, curandState * state) {
 	return curand(state) % range;
@@ -149,6 +162,43 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
     return err;
 }
 
+__device__ float s_calcScoreHeatmapSingleActiveRegion(
+    const int moved, 
+    half3* __restrict__ clusters_positions, 
+    int* __restrict__ gpu_heatmap_chromosome_boundaries, 
+    float * __restrict__ heatmap_dist,
+    const int& heatmapSize,
+    const int& heatmapDiagonalSize,
+    const int& activeRegionSize,
+    const int& chromosomeBoundariesSize, 
+    //TODO this reference may be a bad idea 
+    half3& curr_vector,
+    int& warpIdx
+) {
+    double err = 0.0;
+    float helper;
+    int st = 0, end = activeRegionSize - 1;
+    if (heatmapSize != activeRegionSize) { printf("heatmap sizes mismatch, dist size=%d, active region=%d", heatmapSize, activeRegionSize); return 0.0; }
+    half3 temp_one;
+    
+    // TODO can we precompute?
+    // array with start and end 
+    if(chromosomeBoundariesSize > 0) {
+        getChromosomeHeatmapBoundary(moved, st, end, gpu_heatmap_chromosome_boundaries, chromosomeBoundariesSize);
+    }
+
+    for (int i = st; i <= end; ++i) {
+        if (abs(i-moved) >= heatmapDiagonalSize) {
+            if (i == moved || (helper = heatmap_dist[i]) < 1e-3) continue;	// ignore 0 values
+            //no warp divergence as all threads are from the same warp so the warpIdx will evaluate the same
+            subtractFromVector3(temp_one, *(clusters_positions + i),
+                                          (moved == warpIdx) ? curr_vector : *(clusters_positions + moved));
+            helper = magnitude(temp_one) / helper - 1; 
+            err += helper * helper;
+        }
+    }
+    return err;
+}
 //this function uses following
 //	-> size of the active region
 //	-> the whole active region array
@@ -246,12 +296,16 @@ __global__ void MonteCarloHeatmapKernel(
     // this could be given as argument (e.g. 2 warps per el then warpIdx = threadIndex/(warpSize * 2))
     // should we use a register? operation may be costly but it's a few cycles costly while memory operation is 
     // few hundred cycles costly
+    extern __shared__ float s_heatmap_dist[];
+    
     int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
-    int warpIdx = (threadIndex / warpSize) % activeRegionSize;
+    int warpIdx = blockIdx.x % activeRegionSize;
+    //int warpIdx = (threadIndex / warpSize) % activeRegionSize;
     half3 curr_vector;
     half3 displacement;
 	float score_curr = score;
     float score_prev = score_curr;
+    __shared__ unsigned int mutex;
     #if __CUDA_ARCH >= 800
         int i_winner;
         int i_score;
@@ -259,6 +313,11 @@ __global__ void MonteCarloHeatmapKernel(
         float f_winner;
     #endif
     curandState localState = state[threadIndex];
+    for(int i = 0; i <= activeRegionSize / blockDim.x; ++i) {
+        if(threadIdx.x + i * blockDim.x < activeRegionSize)
+            s_heatmap_dist[threadIdx.x + i * blockDim.x] = heatmap_dist[activeRegionSize * (threadIdx.x + i * blockDim.x) + warpIdx];
+    }
+    __syncthreads();
     // MOVE ALL RELEVANT POSITIONS INTO THE LOCAL MEM
     while(true) {
         if(threadIndex == 0) {
@@ -266,7 +325,7 @@ __global__ void MonteCarloHeatmapKernel(
                        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx));
                 }
         curr_vector = clusters_positions[warpIdx];
-        #define N 512
+        #define N 180
         #pragma unroll
         for(int i = 0; i < N; ++i) {
             if (clusters_fixed[warpIdx]) *error = true;
@@ -287,7 +346,7 @@ __global__ void MonteCarloHeatmapKernel(
             score_curr = score_prev;
             subtractFromVector(curr_vector, displacement);
         }
-        T *= 0.999;
+        T *= 0.9999;
         iterations += N;
         //find the best move
         __syncwarp();
@@ -306,13 +365,17 @@ __global__ void MonteCarloHeatmapKernel(
             if(f_winner == score_curr) {
         #endif
             // TODO doubling of the same work here -> memoization or specialized function for this point
+            mutex_lock(&mutex);
             if(calcScoreHeatmapSingleActiveRegion(warpIdx, clusters_positions, heatmap_chromosome_boundaries, 
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_vector, warpIdx) <
                 calcScoreHeatmapSingleActiveRegion(warpIdx, clusters_positions, heatmap_chromosome_boundaries, 
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx)) {
-                        clusters_positions[warpIdx] = curr_vector;
+                    clusters_positions[warpIdx] = curr_vector;
                 }
+            mutex_unlock(&mutex);
         }
+        // TODO THREADFENCE OR THREADFENCE BLOCK
+        __threadfence();
         #if __CUDA_ARCH__ >= 800
             score_curr = i_winner;
         #else
@@ -322,7 +385,7 @@ __global__ void MonteCarloHeatmapKernel(
         // check if we should stop
         // make sure that Settings::MCstopConditionSteps is divisible by N
         // 32767 = 32768 - 1, which is a power of 2
-        if (iterations % 4096 == 0) {
+        if (iterations % 3600 == 0) {
             //if ((score_curr > Settings::MCstopConditionImprovementHeatmap * milestone_score &&
              //       milestone_success < Settings::MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
                 
@@ -415,7 +478,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 
 	output(2, "initial score: %lf (density=%lf)\n", score_curr, score_density);
     std::cout << "CHROMOSOME BOUNDARIES SIZE IS : " << heatmap_chromosome_boundaries.size() << std::endl;
-    MonteCarloHeatmapKernel<<<blocks, threads>>>(
+    MonteCarloHeatmapKernel<<<blocks, threads, active_region.size() * sizeof(float)>>>(
         devStates,
         thrust::raw_pointer_cast(d_clusters_fixed.data()),
         thrust::raw_pointer_cast(d_clusters_positions.data()),
@@ -426,7 +489,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         score_curr,
         settings,
         thrust::raw_pointer_cast(d_heatmap_dist.data()),
-        step_size,
+        0.1f * step_size,
         clusters.size(),
         active_region.size(),
         heatmapSize,
