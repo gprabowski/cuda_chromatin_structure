@@ -352,56 +352,55 @@ __global__ void ParticleSwarmSync(
     #define WMAX 0.9
     #define WMIN 0.4
     #define C1 2.05
-    #define C2 2.05
+    #define C2 2.05 
     int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
     int particleIdx = blockIdx.x % activeRegionSize;
     int warpIdx = (threadIndex / warpSize) % activeRegionSize;
+    int laneIdx = threadIdx.x % 32;
+    int blockWarpIdx = (threadIdx.x / warpSize);
     half3 curr_position;
     half3 local_best_position;
     half3 velocity;
     float temp_score;
     float local_best_score;
-    __shared__ half3 global_best_position;
-    __shared__ float global_best_score;
     __shared__ unsigned int mutex;
+    __shared__ float best_scores[2];
+    __shared__ half3 best_positions[2];
     float inertia;
     *error = clusters_fixed[warpIdx];
     curandState localState = state[threadIndex];
-    if(threadIdx.x == 0) {
-        global_best_score = 0.0f;
-        global_best_position.x = 0.0f; 
-        global_best_position.y = 0.0f; 
-        global_best_position.z = 0.0f; 
+    if(laneIdx == 0) {
+        best_scores[blockWarpIdx] = 0.0f;
     }
     __syncthreads();
-    randomVector(velocity, 300.0f, false, &localState);
+    velocity.x = __float2half(0.0f);
+    velocity.y = __float2half(0.0f);
+    velocity.z = __float2half(0.0f);
     randomVector(curr_position, 150.0f, false, &localState);
     local_best_position = curr_position;
-    local_best_score = calcScoreHeatmapSingleActiveRegion(particleIdx, clusters_positions, heatmap_chromosome_boundaries, 
-        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_position, particleIdx);
-    temp_score = blockReduceMin(local_best_score);
-    if(blockReduceMin(local_best_score) == local_best_score) {
-        global_best_position = local_best_position;
-        global_best_score = local_best_score;
-        clusters_positions[particleIdx] = local_best_position;
+    local_best_score = calcScoreHeatmapSingleActiveRegion(warpIdx, clusters_positions, heatmap_chromosome_boundaries, 
+        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_position, warpIdx);
+    if(warpReduceMin(local_best_score) == local_best_score) {
+        best_scores[blockWarpIdx] = local_best_score;
+        best_positions[blockWarpIdx] = local_best_position;
+        clusters_positions[warpIdx] = local_best_position;
     }
     for(int i = 1; i < num_generations; ++i) {
-            __syncthreads();
-           inertia = WMAX - ((WMAX - WMIN) / num_generations) * i;
-           add3Vectors(velocity, multiplyVector(velocity, inertia), multiplyVector(subtractAndReturnVector(global_best_position, curr_position), curand_uniform(&localState) * C1),
+            __syncwarp();
+           add3Vectors(velocity, multiplyVector(velocity, inertia), multiplyVector(subtractAndReturnVector(best_positions[blockWarpIdx], curr_position), curand_uniform(&localState) * C1),
                                   multiplyVector(subtractAndReturnVector(local_best_position, curr_position), curand_uniform(&localState) * C2));
            addToVector(curr_position, velocity);
-           temp_score = calcScoreHeatmapSingleActiveRegion(particleIdx, clusters_positions, heatmap_chromosome_boundaries, 
-           heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_position, particleIdx);
+           temp_score = calcScoreHeatmapSingleActiveRegion(warpIdx, clusters_positions, heatmap_chromosome_boundaries, 
+           heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_position, warpIdx);
            if(temp_score < local_best_score) {
                 local_best_score = temp_score;
                 local_best_position = curr_position;
            }
-           __syncthreads();
-           if(blockReduceMin(local_best_score) == local_best_score && local_best_score < global_best_score) {
-               global_best_score = local_best_score;
-               global_best_position = local_best_position;
-               clusters_positions[particleIdx] = local_best_position;
+           __syncwarp();
+           if(warpReduceMin(local_best_score) == local_best_score && local_best_score < best_scores[blockWarpIdx]) {
+               best_scores[blockWarpIdx] = local_best_score;
+               best_positions[blockWarpIdx] = local_best_position;
+               clusters_positions[warpIdx] = local_best_position;
            }
     }
     state[threadIndex] = localState;
@@ -411,8 +410,8 @@ __global__ void ParticleSwarmSync(
 
 
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
-    const int blocks = active_region.size();
-    const int threads = 256;
+    const int blocks = active_region.size() / 2;
+    const int threads = 64;
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
 
@@ -500,7 +499,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         heatmap_dist.diagonal_size,
         heatmap_chromosome_boundaries.size(),
         d_hasError,
-        100000
+        10000
     );
 
     gpuErrchk( cudaPeekAtLastError() );
