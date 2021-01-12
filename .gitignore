@@ -1,4 +1,5 @@
 data/
 chr*/
-bin/*
+bin/
+*.o
 3dnome

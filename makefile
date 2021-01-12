@@ -18,7 +18,7 @@ CC_LIBS=
 ## NVCC COMPILER OPTIONS ##
 
 NVCC=nvcc
-NVCC_FLAGS=--std c++17 -arch=sm_75 --use_fast_math -g -G 
+NVCC_FLAGS=--std c++17 -arch=sm_75 --use_fast_math -g -G
 NVCC_LIBS=
 
 # CUDA library directory:
@@ -26,7 +26,7 @@ CUDA_LIB_DIR= -L$(CUDA_ROOT_DIR)/lib64
 # CUDA include directory:
 CUDA_INC_DIR= -I$(CUDA_ROOT_DIR)/include
 # CUDA linking libraries:
-CUDA_LINK_LIBS= -lcudart
+CUDA_LINK_LIBS= -lcudart -lcudadevrt
 
 ##########################################################
 
@@ -59,7 +59,7 @@ OBJS = $(OBJ_DIR)/main.o $(OBJ_DIR)/Anchor.o $(OBJ_DIR)/BedRegion.o $(OBJ_DIR)/B
 
 # Link c++ and CUDA compiled object files to target executable:
 $(EXE) : $(OBJS)
-	$(CC) $(CC_FLAGS) $(OBJS) -o $@ $(CUDA_INC_DIR) $(CUDA_LIB_DIR) $(CUDA_LINK_LIBS)
+	$(CC) $(CC_FLAGS) bin/file_link.o $(OBJS) -o $@ $(CUDA_INC_DIR) $(CUDA_LIB_DIR) $(CUDA_LINK_LIBS)
 
 # Compile main .cpp file to object files:
 $(OBJ_DIR)/%.o : %.cpp
@@ -69,17 +69,18 @@ $(OBJ_DIR)/%.o : %.cpp
 $(OBJ_DIR)/%.o : $(SRC_DIR)/%.cpp include/%.h
 	$(CC) $(CC_FLAGS) -c $< -o $@
 
-#Compile library files
+#Compile cpp library files
 $(OBJ_DIR)/%.o : $(LIB_DIR)/%.cpp $(LIB_DIR)/%.h
 	$(CC) $(CC_FLAGS) -c $< -o $@
 
-#Compile library files
+#Compile c library files
 $(OBJ_DIR)/%.o : $(LIB_DIR)/%.c $(LIB_DIR)/%.h
 	$(CC) $(CC_FLAGS) -c $< -o $@
 
 # Compile CUDA source files to object files:
 $(OBJ_DIR)/%.o : $(SRC_DIR)/%.cu $(INC_DIR)/%.h
-	$(NVCC) $(NVCC_FLAGS) -c $< -o $@ $(NVCC_LIBS)
+	nvcc $(NVCC_FLAGS) -rdc=true -c $< -o $@
+	nvcc $(NVCC_FLAGS) -dlink -o bin/file_link.o $@ $(CUDA_LINK_LIBS)
 
 # Clean objects in object directory.
 clean:
@@ -88,7 +89,7 @@ clean:
 
 
 
-
+# $(NVCC) $(NVCC_FLAGS) -c $< -o $@ $(NVCC_LIBS)
 # ORIGINAL MAKEFILE
 
 # SRC=$(wildcard src/*.cpp) $(wildcard src/lib/*.c*)

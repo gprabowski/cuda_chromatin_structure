@@ -18,7 +18,17 @@
 #include "../include/LooperSolver.h"
 
 #define ITERATIONS 1000
+#define ISLAND_SIZE 32
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+#define cucheck_dev(call)                                   \
+{                                                           \
+  cudaError_t cucheck_err = (call);                         \
+  if(cucheck_err != cudaSuccess) {                          \
+    const char *err_str = cudaGetErrorString(cucheck_err);  \
+    printf("%s (%d): %s\n", __FILE__, __LINE__, err_str);   \
+    assert(0);                                              \
+  }                                                         \
+}
 
 typedef struct half3 {
 	__half x;
@@ -57,17 +67,17 @@ __global__ void setupKernel(curandState * state, time_t seed) {
 }
 
 __device__ void bitonicSort(__half *dev_values, short *indices, int islandSize) {
-	int i, ixj; /* Sorting partners: i and ixj */
-	int j, k; 
+	short i, ixj; /* Sorting partners: i and ixj */
 
-  	i = threadIdx.x;
+	i = threadIdx.x;
+	indices[i] = i;
 	
-	for (k = 2; k <= islandSize; k <<= 1) {
-		for (j = k >> 1; j > 0; j >>= 1) {
+	for (short k = 2; k <= islandSize; k <<= 1) {
+		for (short j = k >> 1; j > 0; j >>= 1) {
 			ixj = i ^ j;
 
 			/* The threads with the lowest ids sort the array. */
-			if ((ixj) > i) {
+			if (ixj > i) {
 				if ((i&k) == 0) {
 					/* Sort ascending */
 					if (__hgt(dev_values[i], dev_values[ixj])) {
@@ -93,7 +103,7 @@ __device__ void bitonicSort(__half *dev_values, short *indices, int islandSize) 
 			}
 			__syncwarp();
 		}
-	}	  
+	}
 }
 
 __device__ void subtractFromVector3(half3 *destination, half3 *value1, half3 *value2) {
@@ -102,14 +112,15 @@ __device__ void subtractFromVector3(half3 *destination, half3 *value1, half3 *va
 	destination->z = __hsub(value1->z, value2->z);
 }
 
-__device__ float magnitude(half3 *vector) {
+__device__ __half magnitude(half3 *vector) {
 	__half sum = 0;
 	
 	sum = __hadd(sum, __hmul(vector->x, vector->x));
 	sum = __hadd(sum, __hmul(vector->y, vector->y));
 	sum = __hadd(sum, __hmul(vector->z, vector->z));
 
-    return sqrtf(__half2float(sum));
+	// return sqrtf(__half2float(sum));
+	return hsqrt(sum);
 }
 
 __device__ void getChromosomeHeatmapBoundary(int p, int &start, int &end, int* gpu_heatmap_chromosome_boundaries, int chromosomeBoundariesSize) {
@@ -161,29 +172,81 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
     return err;
 }
 
-__device__ __half calcScoreHeatmapActiveRegion(
-    int moved, 
-    half3 * clusters_positions, 
-    int* gpu_heatmap_chromosome_boundaries, 
-    float * heatmap_dist,
+__global__ void calculateScoreHeatmapActiveRegion(
+	half3 * clusters_positions,
+	int* gpu_heatmap_chromosome_boundaries, 
+	float * heatmap_dist,
+	__half * scores,
     int heatmapSize,
     int heatmapDiagonalSize,
     int activeRegionSize,
     int chromosomeBoundariesSize
 ) {
-    float err = 0.0;
-    size_t n = activeRegionSize;
-	if (moved == -1) {
-        for (size_t i = 0; i < n; ++i) {
-            err += calcScoreHeatmapSingleActiveRegion(i, clusters_positions, gpu_heatmap_chromosome_boundaries, 
-                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize);
-        }
+	short x = threadIdx.x;
+	short y = threadIdx.y;
+	short z = threadIdx.z;
+
+	// TODO: chromosomeBoundaries (is it even needed?)
+
+	if (x == y || abs(x-y) < heatmapDiagonalSize) return;
+	
+	__half heatmapValue = __float2half(heatmap_dist[x * heatmapSize + y]);
+
+	if (__hgt(1e-6, heatmapValue)) return; // ignore 0 values
+
+	short xId = blockDim.x * blockIdx.x + threadIdx.x + (z * activeRegionSize);
+	short yId = blockDim.y * blockIdx.x + threadIdx.y + (z * activeRegionSize);
+	
+	half3 temp;
+	half3* temp_one = clusters_positions + xId;
+    half3* temp_two = clusters_positions + yId;
+	subtractFromVector3(&temp, temp_one, temp_two);
+	
+    __half d = magnitude(&temp);
+	__half cerr = __hdiv(__hsub(d, heatmapValue), heatmapValue);
+	
+	// could be replaced with reduction ( O(n) -> O(log(n)) )
+	atomicAdd(&scores[blockIdx.x * ISLAND_SIZE + z], __hmul(cerr, cerr));
+}
+
+__device__ void calculateFitness(
+	half3 * populationGlobal,
+	half3 * populationShared,
+	int * heatmap_chromosome_boundaries, 
+	float * heatmap_dist,
+	__half * scores,
+	__half * fitness,
+	const int heatmapSize,
+	const int heatmapDiagonalSize,
+	const int clusterSize,
+	const int chromosomeBoundariesSize
+) {
+	int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
+
+	dim3 block(clusterSize, clusterSize, ISLAND_SIZE);
+
+	for(int i = 0; i < clusterSize; ++i) {
+		populationGlobal[threadIndex * clusterSize + i] = populationShared[threadIdx.x * clusterSize + i];
 	}
-	else {
-        err = calcScoreHeatmapSingleActiveRegion(moved, clusters_positions, gpu_heatmap_chromosome_boundaries, 
-                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize);
+	
+	if(threadIndex == 0) {
+		calculateScoreHeatmapActiveRegion<<<gridDim.x, block>>>(
+			populationGlobal,
+			heatmap_chromosome_boundaries, 
+			heatmap_dist,
+			scores,
+			heatmapSize,
+			heatmapDiagonalSize,
+			clusterSize,
+			chromosomeBoundariesSize
+		);
+		cucheck_dev( cudaPeekAtLastError() );
+		cucheck_dev( cudaDeviceSynchronize() );
 	}
-	return __float2half(err);
+	__syncthreads();
+	
+	fitness[threadIdx.x] = scores[blockIdx.x * ISLAND_SIZE + threadIdx.x];
+	__syncthreads();
 }
 
 // ACTION ITEMS:
@@ -192,7 +255,7 @@ __device__ __half calcScoreHeatmapActiveRegion(
 // 		is it even possible?
 // 3. optimize migration by utilizing more than one thread for data transfer
 // 4. Since we probably won't be able to fit more than 32 elements per block, we can use warp-level operations
-// 5. Can we do better with the calcScoreHeatmapActiveRegion function?
+// 5. DONE - OF COURSE WE CAN - Can we do better with the calcScoreHeatmapActiveRegion function?
 // 6. We could utilize Tensor Cores for offspring calculations
 // 7. Test thrust reduction on the whole population vs local warp reductions => thrust on smaller load
 // 8. Test half3 struct vs flat 1D array of __half
@@ -213,22 +276,20 @@ __global__ void geneticHeatmap(
 	const int migrationConstant,
     const int heatmapSize,
     const int heatmapDiagonalSize,
-	const int chromosomeBoundariesSize,
-	const int islandSize
+	const int chromosomeBoundariesSize
 ) {
 	int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
-	if(threadIdx.x >= islandSize) return;
+	if(threadIdx.x >= ISLAND_SIZE) return;
 
 	extern __shared__ half3 population[];
-	__shared__ __half fitness[32];
-	__shared__ short selectedIndices[32];
-	__shared__ __half weightsAndCrossover[32];
-	__shared__ short sortedIndices[32];
+	__shared__ __half fitness[ISLAND_SIZE];
+	__shared__ short selectedIndices[ISLAND_SIZE];
+	__shared__ __half weightsAndCrossover[ISLAND_SIZE];
+	__shared__ short sortedIndices[ISLAND_SIZE];
 
 	half3 tempChild[200];
-	short crossoverIdx;
-	half3 *parent1;
-	half3 *parent2;
+	int crossoverIdx;
+	half3 *parent1, *parent2;
 	half3 *localChromosome;
 	__half a, gauss;
 	float mutationProbability;
@@ -245,16 +306,16 @@ __global__ void geneticHeatmap(
 		localChromosome = &population[threadIdx.x * clusterSize];
 
 		// fitness evaluation
-		fitness[threadIdx.x] = calcScoreHeatmapActiveRegion(-1, localChromosome, heatmap_chromosome_boundaries, 
-			heatmap_dist, heatmapSize, heatmapDiagonalSize, clusterSize, chromosomeBoundariesSize);
-
-		__syncwarp();
+		calculateFitness(populationGlobal, population, heatmap_chromosome_boundaries, heatmap_dist,
+			scores, fitness, heatmapSize, heatmapDiagonalSize, clusterSize, chromosomeBoundariesSize
+		);
 
 		if(i == ITERATIONS) break;
 
 		// MIGRATION - START
 		if(i % 100 == 0) {
-			bitonicSort(fitness, sortedIndices, islandSize);
+			// fitness[threadIdx.x] = __float2half(curand_uniform(&localState));
+			bitonicSort(fitness, sortedIndices, ISLAND_SIZE);
 			
 			if(threadIdx.x == 0) {
 				// write M best chromosomes to neighbouring island on the left
@@ -262,7 +323,9 @@ __global__ void geneticHeatmap(
 
 				for(int j = 0; j < migrationConstant; ++j) {
 					for(int k = 0; k < clusterSize; ++k) {
-						populationGlobal[islandId * islandSize * clusterSize + sortedIndices[j] * clusterSize + k] 
+
+						// sortedIndices[j] in global?
+						populationGlobal[islandId * ISLAND_SIZE * clusterSize + sortedIndices[j] * clusterSize + k] 
 							= population[sortedIndices[j] * clusterSize + k];
 					}
 				}
@@ -270,10 +333,10 @@ __global__ void geneticHeatmap(
 				// replace M worst island chromosomes with M best chromosomes from neigbouring island to the right
 				islandId = blockIdx.x == numberOfIslands - 1 ? 0 : blockIdx.x + 1;
 
-				for(int j = islandSize - migrationConstant; j < islandSize; ++j) {
+				for(int j = ISLAND_SIZE - migrationConstant; j < ISLAND_SIZE; ++j) {
 					for(int k = 0; k < clusterSize; ++k) {
 						population[sortedIndices[j] * clusterSize + k] 
-							= populationGlobal[islandId * islandSize * clusterSize + sortedIndices[j] * clusterSize + k];
+							= populationGlobal[islandId * ISLAND_SIZE * clusterSize + sortedIndices[j] * clusterSize + k];
 					}
 				}
 			}
@@ -282,17 +345,15 @@ __global__ void geneticHeatmap(
 			localChromosome = &population[threadIdx.x * clusterSize];
 
 			// fitness evaluation
-			fitness[threadIdx.x] = calcScoreHeatmapActiveRegion(-1, localChromosome, heatmap_chromosome_boundaries, 
-				heatmap_dist, heatmapSize, heatmapDiagonalSize, clusterSize, chromosomeBoundariesSize);
-
-			__syncwarp();
+			calculateFitness(populationGlobal, population, heatmap_chromosome_boundaries, heatmap_dist,
+				scores, fitness, heatmapSize, heatmapDiagonalSize, clusterSize, chromosomeBoundariesSize
+			);
 		}
 		// MIGRATION - END
 
 		// selection and crossover
-		crossoverIdx = curand(&localState) % islandSize;
+		crossoverIdx = curand(&localState) % ISLAND_SIZE;
 
-		// each thread picks random partner??? seems very odd
 		selectedIndices[threadIdx.x] = __hgt(fitness[threadIdx.x], fitness[crossoverIdx]) ? threadIdx.x : crossoverIdx;
 		weightsAndCrossover[threadIdx.x] = __float2half(curand_uniform(&localState));
 		__syncwarp();
@@ -304,7 +365,6 @@ __global__ void geneticHeatmap(
 			crossoverIdx = threadIdx.x % 2 == 0 ? 1 : -1;  // reuse the variable
 
 			parent1 = &population[selectedIndices[threadIdx.x] * clusterSize];
-			// FIX - warp out of range here (happens only on threads with even id)
 			parent2 = &population[selectedIndices[(int)threadIdx.x + crossoverIdx] * clusterSize];
 			__half oneMinusA_fp16 = __hsub(__float2half(1.0), a);
 
@@ -333,11 +393,6 @@ __global__ void geneticHeatmap(
 		}
 		__syncwarp();
 		++i;
-	}
-
-	// after we finish, write population back to global memory
-	for(int i = 0; i < clusterSize; ++i) {
-		populationGlobal[threadIndex * clusterSize + i] = population[threadIdx.x * clusterSize + i];
 	}
 }
 
@@ -410,8 +465,7 @@ float LooperSolver::ParallelGeneticHeatmap() {
 		M,
 		heatmapSize,
 		heatmap_dist.diagonal_size,
-		heatmap_chromosome_boundaries.size(),
-		threads
+		heatmap_chromosome_boundaries.size()
 	);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
