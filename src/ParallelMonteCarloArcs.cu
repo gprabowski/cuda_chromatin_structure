@@ -179,7 +179,7 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
 
     for (int i = st; i <= end; ++i) {
         if (abs(i-moved) >= heatmapDiagonalSize) {
-            if (i == moved || (helper = con_heatmap_dist[i * heatmapSize + moved]) < 1e-3) continue;	// ignore 0 values
+            if (i == moved || (helper = heatmap_dist[i * heatmapSize + moved]) < 1e-3) continue;	// ignore 0 values
             //no warp divergence as all threads are from the same warp so the warpIdx will evaluate the same
             subtractFromVector3(temp_one, *(clusters_positions + i),
                                           (moved == warpIdx) ? curr_vector : *(clusters_positions + moved));
@@ -314,11 +314,11 @@ __global__ void MonteCarloHeatmapKernel(
         block_winner = score;
     while(true) {
         if(threadIndex == 0) {
-                   printf("GPU CALC FUNCTION VERIFICATION\n CPU SCORE: %f GPU SCORE %f \n", score, calcScoreHeatmapActiveRegion(-1, clusters_positions, heatmap_chromosome_boundaries, 
-                       heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx));
+                   printf("GPU CALC FUNCTION VERIFICATION\n CPU SCORE: %f GPU SCORE %f \n", score, calcScoreHeatmapActiveRegion(-1, local_clusters_positions, heatmap_chromosome_boundaries, 
+                       heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(local_clusters_positions + warpIdx), warpIdx));
                 }
         curr_vector = local_clusters_positions[warpIdx];
-        #define N 128
+        #define N 256
         #pragma unroll
         for(int i = 0; i < N; ++i) {
             if (clusters_fixed[warpIdx]) *error = true;
@@ -339,7 +339,7 @@ __global__ void MonteCarloHeatmapKernel(
             score_curr = score_prev;
             subtractFromVector(curr_vector, displacement);
         }
-        T *= 0.99999;
+        T *= 0.9999;
         iterations += N;
         for(int i = 0; i <= activeRegionSize / blockDim.x; ++i) {
             if(threadIdx.x + i * blockDim.x < activeRegionSize)
@@ -366,7 +366,6 @@ __global__ void MonteCarloHeatmapKernel(
                     }
                 }
         }
-}
         #if __CUDA_ARCH__ >= 800
             score_curr = i_winner;
         #else
@@ -397,7 +396,7 @@ __global__ void MonteCarloHeatmapKernel(
 
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     const int blocks = active_region.size();
-    const int threads = 256;
+    const int threads = 128;
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
 
@@ -452,11 +451,6 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     for(int i = 0; i < heatmapSize; ++i) {
         thrust::copy(heatmap_dist.v[i], heatmap_dist.v[i] + heatmapSize, d_heatmap_dist.begin() + heatmapSize * i);
     }
-    for(int i = 0; i < heatmapSize ; ++i) {
-        for(int j = 0; j < heatmapSize; ++j) {
-            cudaMemcpyToSymbol(con_heatmap_dist, &(heatmap_dist.v[i][j]), sizeof(float), sizeof(float)*(i*heatmapSize + j), cudaMemcpyHostToDevice);
-        }
-    }
     for(int i = 0; i < active_region.size(); ++i) {
         h_clusters_positions_half[i].x = __float2half(clusters[active_region[i]].pos.x);
         h_clusters_positions_half[i].y = __float2half(clusters[active_region[i]].pos.y);
@@ -482,7 +476,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         thrust::raw_pointer_cast(d_milestone_successes.data()),
         thrust::raw_pointer_cast(d_scores.data()),
         T,
-        0.6f * score_curr,
+        0.05 * score_curr,
         settings,
         thrust::raw_pointer_cast(d_heatmap_dist.data()),
         step_size,
