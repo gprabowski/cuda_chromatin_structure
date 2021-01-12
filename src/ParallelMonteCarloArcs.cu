@@ -94,7 +94,8 @@ __device__ void subtractFromVector3(half3& destination, half3& value1, half3& va
 }
 
 __device__ float magnitude(half3& vector) {
-    return __half2float(hsqrt(__hmul(vector.x, vector.x) + __hmul(vector.y, vector.y) + __hmul(vector.z, vector.z)));
+    float x = __half2float(vector.x), y = __half2float(vector.y), z = __half2float(vector.z);
+    return sqrtf(x*x + y*y + z*z);
 }
 
 //this function uses following external funcitonality / data
@@ -279,7 +280,7 @@ __global__ void MonteCarloHeatmapKernel(
                        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx));
                 }
         curr_vector = local_clusters_positions[warpIdx];
-        #define N 512
+        #define N 128
         #pragma unroll
         for(int i = 0; i < N; ++i) {
             if (clusters_fixed[warpIdx]) *error = true;
@@ -317,9 +318,10 @@ __global__ void MonteCarloHeatmapKernel(
             f_winner = score_curr;
             #pragma unroll 5
             for (int offset = 16; offset > 0; offset /= 2)
-                f_winner = __shfl_down_sync(FULL_MASK, f_winner, offset);
+                f_winner = fminf(f_winner, __shfl_down_sync(FULL_MASK, f_winner, offset));
             //propagate and check who's the lucky one
-            __shfl_sync(FULL_MASK, f_winner, 0);
+            __syncwarp();
+            f_winner  = __shfl_sync(FULL_MASK, f_winner, 0);
             if(f_winner == score_curr) {
         #endif
             // TODO doubling of the same work here -> memoization or specialized function for this point
@@ -370,7 +372,7 @@ __global__ void MonteCarloHeatmapKernel(
 
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     const int blocks = active_region.size();
-    const int threads = 512;
+    const int threads = 256;
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
 
@@ -455,7 +457,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         thrust::raw_pointer_cast(d_milestone_successes.data()),
         thrust::raw_pointer_cast(d_scores.data()),
         T,
-        score_curr,
+        0.6f * score_curr,
         settings,
         thrust::raw_pointer_cast(d_heatmap_dist.data()),
         step_size,
