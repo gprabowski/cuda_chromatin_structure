@@ -131,7 +131,8 @@ __device__ float magnitude(half3& vector) {
 
 }
 
-__inline__ __device__
+// TODO make it inline
+__device__
 float warpReduceMin(float val) {
     __syncwarp();
     unsigned mask = __activemask(); 
@@ -149,7 +150,8 @@ float warpReduceMin(float val) {
 }
 
 // FOR AT MOST 32 WARPS PER BLOCK
-__inline__ __device__
+// TODO inline it
+__device__
 float blockReduceMin(float val) {
   static __shared__ float shared[32]; // Shared mem for 32 partial sums
   int lane = threadIdx.x % warpSize;
@@ -157,16 +159,45 @@ float blockReduceMin(float val) {
 
   val = warpReduceMin(val);     // Each warp performs partial reduction
 
-  if (lane==0) shared[wid]=val; // Write reduced value to shared memory
+  if (lane==0) shared[wid]=val; 
 
-  __syncthreads();              // Wait for all partial reductions
-
-  //read from shared memory only if that warp existed
-  val = (threadIdx.x < blockDim.x / warpSize) ? shared[lane] : FLT_MAX;
+  __syncthreads(); 
+  val = (threadIdx.x <= blockDim.x / warpSize) ? shared[lane] : FLT_MAX;
 
   if (wid==0) { shared[lane] = warpReduceMin(val); }//Final reduce within first warp
   __syncthreads();
   return shared[0];
+}
+
+__inline__ __device__
+float warpReduceAdd(float val) {
+    __syncwarp();
+    unsigned mask = __activemask(); 
+    #if __CUDA_ARCH__ >= 800
+        val = __reduce_add_sync(mask, val);
+    #else
+        #pragma unroll 5
+        for (int offset = 16; offset > 0; offset /= 2)
+            val += __shfl_down_sync(mask, val, offset);
+        __syncwarp();
+        val = __shfl_sync(mask, val, 0);
+    #endif
+    return val;
+}
+
+// FOR AT MOST 32 WARPS PER BLOCK
+__inline__ __device__
+float blockReduceAdd(float val) {
+  static __shared__ float shared[32];
+  int lane = threadIdx.x % warpSize;
+  int wid = threadIdx.x / warpSize;
+  val = warpReduceAdd(val);   
+  if (lane==0) shared[wid]=val;
+  __syncthreads();             
+  val = (threadIdx.x < blockDim.x / warpSize) ? shared[lane] : 0;
+  if (wid==0) { val = warpReduceAdd(val); }//Final reduce within first warp
+  __syncthreads();
+  return val;
 }
 
 //this function uses following external funcitonality / data
@@ -196,7 +227,7 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
     const int& chromosomeBoundariesSize, 
     //TODO this reference may be a bad idea 
     half3& curr_vector,
-    int& warpIdx
+    const int& warpIdx
 ) {
     double err = 0.0;
     float helper;
@@ -223,196 +254,114 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
     return err;
 }
 
-__device__ float s_calcScoreHeatmapSingleActiveRegion(
-    const int moved, 
-    half3* __restrict__ clusters_positions, 
-    int* __restrict__ gpu_heatmap_chromosome_boundaries, 
-    float * __restrict__ heatmap_dist,
-    const int& heatmapSize,
-    const int& heatmapDiagonalSize,
-    const int& activeRegionSize,
-    const int& chromosomeBoundariesSize, 
-    //TODO this reference may be a bad idea 
-    half3& curr_vector,
-    int& warpIdx
-) {
-    double err = 0.0;
-    float helper;
-    int st = 0, end = activeRegionSize - 1;
-    if (heatmapSize != activeRegionSize) { printf("heatmap sizes mismatch, dist size=%d, active region=%d", heatmapSize, activeRegionSize); return 0.0; }
-    half3 temp_one;
-    
-    // TODO can we precompute?
-    // array with start and end 
-    if(chromosomeBoundariesSize > 0) {
-        getChromosomeHeatmapBoundary(moved, st, end, gpu_heatmap_chromosome_boundaries, chromosomeBoundariesSize);
-    }
-
-    for (int i = st; i <= end; ++i) {
-        if (abs(i-moved) >= heatmapDiagonalSize) {
-            if (i == moved || (helper = heatmap_dist[i]) < 1e-3) continue;	// ignore 0 values
-            //no warp divergence as all threads are from the same warp so the warpIdx will evaluate the same
-            subtractFromVector3(temp_one, *(clusters_positions + i),
-                                          (moved == warpIdx) ? curr_vector : *(clusters_positions + moved));
-            helper = magnitude(temp_one) / helper - 1; 
-            err += helper * helper;
-        }
-    }
-    return err;
-}
-//this function uses following
-//	-> size of the active region
-//	-> the whole active region array
-//	heatmap_dist
-//		-> size
-//		-> diagonal size
-//		-> entire v 2d array (column at once)
-//	heatmap_chromosome_boundaries	
-//		-> size
-// getChromosomeBoundary
-// entire active region array
-// all positions from the clusters 
-__device__ float calcScoreHeatmapActiveRegion(
-    const int moved, 
-    half3 * __restrict__ clusters_positions, 
-    int * __restrict__ gpu_heatmap_chromosome_boundaries, 
-    float * __restrict__ heatmap_dist,
-    const int& heatmapSize,
-    const int& heatmapDiagonalSize,
-    const int& activeRegionSize,
-    const int& chromosomeBoundariesSize, 
-    half3& curr_vector, 
-    int& warpIdx
-) {
-    float err = 0.0f;
-	if (moved == -1) {
-        for (int i = 0; i < activeRegionSize; ++i) {
-            err += calcScoreHeatmapSingleActiveRegion(i, clusters_positions, gpu_heatmap_chromosome_boundaries, 
-                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_vector, warpIdx);
-        }
-        return err;
-	}
-    return calcScoreHeatmapSingleActiveRegion(moved, clusters_positions, gpu_heatmap_chromosome_boundaries, 
-            heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_vector, warpIdx);
-}
-
-// calculate score based on distances between the selected bead and clusters connected with it by arcs
-__device__ float calcScoreDistancesActiveRegion(
-    const int & cluster_moved, 
-    int * __restrict__ active_region, 
-    half3 * __restrict__ clusters_positions, 
-    float * __restrict__ heatmap_exp_dist_anchor,
-    const float & springConstantStretchArcs,
-    const float & springConstantSqueezeArcs
-) {
-	float sc = 0.0f, diff;
-	int st = active_region[cluster_moved];
-    int n = sizeof(active_region) / sizeof(active_region[0]);
-    half3 v;
-    
-	for (int i = 0; i < n; ++i) {
-		if (i == cluster_moved) continue;
-        // v = clusters[st].pos - clusters[active_region[i]].pos;
-        v.x = clusters_positions[st].x - clusters_positions[active_region[i]].x;
-        v.y = clusters_positions[st].y - clusters_positions[active_region[i]].y;
-        v.z = clusters_positions[st].z - clusters_positions[active_region[i]].z;
-
-		if (heatmap_exp_dist_anchor[i * n + cluster_moved] < 1e-6) continue;
-
-		diff = (magnitude(v) - heatmap_exp_dist_anchor[i * n + cluster_moved]) / heatmap_exp_dist_anchor[i * n + cluster_moved];
-		sc += diff * diff * (diff >= 0.0f ? springConstantStretchArcs : springConstantSqueezeArcs);
-	}
-	return sc;
-}
-
-
 __global__ void setupKernel(curandState * state, time_t seed) {
-    const int tid = blockDim.x * blockIdx.x + threadIdx.x;
-    curand_init(seed, tid, 0, &state[tid]);
+    int posid = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
+    curand_init(seed, posid, 0, &state[posid]);
 }
 
-__global__ void ParticleSwarmSync(
+
+__global__ void initializationKernel(
     curandState * __restrict__ state,
-    bool * __restrict__ clusters_fixed,
-    half3* __restrict__ clusters_positions,
-	int* __restrict__ heatmap_chromosome_boundaries,
-	int * __restrict__ milestone_successes,
-	float * __restrict__ scores,
-    const float score,
-	gpu_settings settings,
-	float * __restrict__ heatmap_dist,
-    const int numberOfClusters,
-    const int activeRegionSize,
-    const int heatmapSize,
-    const int heatmapDiagonalSize,
-    const int chromosomeBoundariesSize,
-    bool * __restrict__ error,
-    const int num_generations
+    half3 * positions,
+    half3 * velocities
 ) {
+    int posID = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
+    randomVector(positions[posID], 150.0f, false, (state + posID));
+    randomVector(velocities[posID], 300.0f, false, (state + posID));
+}
+
+__global__ void positionUpdateKernel(
+    curandState * __restrict__ state,
+    half3* positions, 
+    half3* local_best_positions,
+    half3* velocities,
+    float* fitnesses,
+    float* local_best_fitnesses,
+    float* global_best_fitnesses, 
+    half3* global_best_positions,
+    int generation,
+    int maxGenerations
+) {
+   // number of thread blocks equal to the number of particles
+   // each thread updates the position of one dim of one particle - block per part
+   // global best, local best need to be passed as args 
     #define WMAX 0.9
     #define WMIN 0.4
     #define C1 2.05
     #define C2 2.05
-    int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
-    int particleIdx = blockIdx.x % activeRegionSize;
-    int warpIdx = (threadIndex / warpSize) % activeRegionSize;
-    half3 curr_position;
-    half3 local_best_position;
-    half3 velocity;
-    float temp_score;
-    float local_best_score;
-    __shared__ half3 global_best_position;
-    __shared__ float global_best_score;
-    __shared__ unsigned int mutex;
-    float inertia;
-    *error = clusters_fixed[warpIdx];
-    curandState localState = state[threadIndex];
-    if(threadIdx.x == 0) {
-        global_best_score = 0.0f;
-        global_best_position.x = 0.0f; 
-        global_best_position.y = 0.0f; 
-        global_best_position.z = 0.0f; 
-    }
-    __syncthreads();
-    randomVector(velocity, 300.0f, false, &localState);
-    randomVector(curr_position, 150.0f, false, &localState);
-    local_best_position = curr_position;
-    local_best_score = calcScoreHeatmapSingleActiveRegion(particleIdx, clusters_positions, heatmap_chromosome_boundaries, 
-        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_position, particleIdx);
-    temp_score = blockReduceMin(local_best_score);
-    if(blockReduceMin(local_best_score) == local_best_score) {
-        global_best_position = local_best_position;
-        global_best_score = local_best_score;
-        clusters_positions[particleIdx] = local_best_position;
-    }
-    for(int i = 1; i < num_generations; ++i) {
-            __syncthreads();
-           inertia = WMAX - ((WMAX - WMIN) / num_generations) * i;
-           add3Vectors(velocity, multiplyVector(velocity, inertia), multiplyVector(subtractAndReturnVector(global_best_position, curr_position), curand_uniform(&localState) * C1),
-                                  multiplyVector(subtractAndReturnVector(local_best_position, curr_position), curand_uniform(&localState) * C2));
-           addToVector(curr_position, velocity);
-           temp_score = calcScoreHeatmapSingleActiveRegion(particleIdx, clusters_positions, heatmap_chromosome_boundaries, 
-           heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_position, particleIdx);
-           if(temp_score < local_best_score) {
-                local_best_score = temp_score;
-                local_best_position = curr_position;
-           }
-           __syncthreads();
-           if(blockReduceMin(local_best_score) == local_best_score && local_best_score < global_best_score) {
-               global_best_score = local_best_score;
-               global_best_position = local_best_position;
-               clusters_positions[particleIdx] = local_best_position;
-           }
-    }
-    state[threadIndex] = localState;
+    int posID = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
+    float inertia = WMAX - ((WMAX - WMIN) / maxGenerations) * generation;
+    add3Vectors(velocities[posID], multiplyVector(velocities[posID], inertia), multiplyVector(subtractAndReturnVector(global_best_positions[blockIdx.x], positions[posID]), curand_uniform(state + posID) * C1),
+                            multiplyVector(subtractAndReturnVector(local_best_positions[posID], positions[posID]), curand_uniform(state + posID) * C2));
+    addToVector(positions[posID], velocities[posID]);
 }
 
+__global__ void fitnessKernel(
+    half3* __restrict__ positions,
+    float* fitnesses,
+    bool * __restrict__ clusters_fixed,
+	int* __restrict__ heatmap_chromosome_boundaries,
+	gpu_settings settings,
+	float * __restrict__ heatmap_dist,
+    const int activeRegionSize,
+    const int heatmapSize,
+    const int heatmapDiagonalSize,
+    const int chromosomeBoundariesSize
+) {
+    // whole block is responsible for one particle 
+    // set of blocks in a swarm is responsible for a swarm
+    int posID = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
+    float local_score = calcScoreHeatmapSingleActiveRegion(threadIdx.x, positions + posID - threadIdx.x, heatmap_chromosome_boundaries, 
+        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, positions[posID], threadIdx.x);
+    __syncthreads();
+    local_score = blockReduceAdd(local_score);
+    if(threadIdx.x == 0) {
+        fitnesses[blockIdx.x * gridDim.y + blockIdx.y] = local_score;
+    }
+}
 
+// TODO This one is easily more parallelizable
+__global__ void bestUpdateKernel(
+    float* fitnesses,
+    float* local_best_fitnesses,
+    float* global_best_fitnesses,
+    half3* positions,
+    half3* local_best_positions,
+    half3* global_best_positions,
+    int numDimensions
+){
+    // one thread per particle
+    int particleID = blockIdx.x * blockDim.x + threadIdx.x;
+    // for each particle check if current fitness < local_best_fitness
+    if(local_best_fitnesses[particleID] > fitnesses[particleID]) {
+        local_best_fitnesses[particleID] = fitnesses[particleID];
+        // easily parallelizable
+        for(int i = 0; i < numDimensions; ++i) {
+            local_best_positions[particleID * numDimensions + i] = positions[(blockIdx.x * blockDim.x + threadIdx.x) * numDimensions + i];
+        }
+    }
 
+    __syncthreads();
+    // reduce local_best_positions into global best for swarm
+    float local_best = local_best_fitnesses[particleID];
+    __syncwarp();
+    float total_local_best = blockReduceMin(local_best);
+    if(total_local_best == local_best) {
+        printf("YOOOOOOOOOOOO\n");
+    }
+    __syncthreads();
+    if(total_local_best < global_best_fitnesses[blockIdx.x] && local_best == total_local_best) {
+        global_best_fitnesses[blockIdx.x] = local_best;
+        for(int i = 0; i < numDimensions; ++i) {
+            global_best_positions[blockIdx.x * numDimensions + i] = local_best_positions[particleID * numDimensions + i];
+        }
+    }
+}
 
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
-    const int blocks = active_region.size();
-    const int threads = 256;
+    const auto numSwarms = 32;
+    const auto numParticles = 26;
+    const auto numDimensions = active_region.size();
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
 
@@ -442,66 +391,108 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     settings.use2D = Settings::use2D;
 	
 	thrust::host_vector<bool> h_clusters_fixed(active_region.size());
-    thrust::host_vector<float> h_clusters_positions(active_region.size() * 3); // just one initial state to copy across
     thrust::host_vector<float> h_scores(1);
     thrust::host_vector<int> h_milestone_successes(1);
-
-    for(int i = 0; i < active_region.size(); ++i) {
-        h_clusters_fixed[i] = clusters[i].is_fixed;
-        #pragma unroll
-        for(int j =0; j < 3; ++j) {
-            h_clusters_positions[i*3 + j] = clusters[active_region[i]].pos[j];
-        }
-    }
+    thrust::host_vector<float> h_fitnesses(numSwarms * numParticles);
+    thrust::host_vector<float> h_best_fitnesses(numParticles * numSwarms);
+    thrust::host_vector<float> h_global_best_fitnesses(numSwarms);
+    thrust::host_vector<half3> h_best_positions(numParticles * numDimensions);
+    thrust::host_vector<half3> h_global_best_positions(numParticles * numDimensions);
+    thrust::host_vector<half3> h_clusters_positions(numSwarms * numParticles * numDimensions);
+    thrust::host_vector<half3> h_velocities(numSwarms * numParticles * numDimensions);
     
+    thrust::device_vector<float> d_fitnesses(numSwarms * numParticles);
+    thrust::fill(d_fitnesses.begin(), d_fitnesses.end(), FLT_MAX);
+    thrust::device_vector<float> d_best_fitnesses(numParticles * numSwarms);
+    thrust::fill(d_best_fitnesses.begin(), d_best_fitnesses.end(), FLT_MAX);
+    thrust::device_vector<float> d_global_best_fitnesses(numSwarms);
+    thrust::fill(d_global_best_fitnesses.begin(), d_global_best_fitnesses.end(), FLT_MAX);
+    thrust::device_vector<half3> d_global_best_positions(numParticles * numDimensions);
+    thrust::device_vector<half3> d_best_positions(numParticles * numDimensions);
+    thrust::device_vector<half3> d_clusters_positions(numSwarms * numParticles * numDimensions);
+    thrust::device_vector<half3> d_velocities(numSwarms * numParticles * numDimensions);
+
+
     thrust::device_vector<int> d_heatmap_chromosome_boundaries(heatmap_chromosome_boundaries);
     thrust::device_vector<bool> d_clusters_fixed = h_clusters_fixed;
-    thrust::host_vector<half3> h_clusters_positions_half(active_region.size());
-    thrust::device_vector<half3> d_clusters_positions(active_region.size());
 	thrust::device_vector<int> d_milestone_successes(1, 0); 
     thrust::device_vector<float> d_scores(1, 0.0f);
     thrust::device_vector<float> d_heatmap_dist(heatmapSize * heatmapSize);
-    //TODO JUST FOR TEST PURPOSES
-
-    // TODO: make sure it's copying in the correct order
     for(int i = 0; i < heatmapSize; ++i) {
         thrust::copy(heatmap_dist.v[i], heatmap_dist.v[i] + heatmapSize, d_heatmap_dist.begin() + heatmapSize * i);
     }
-    for(int i = 0; i < active_region.size(); ++i) {
-        h_clusters_positions_half[i].x = __float2half(clusters[active_region[i]].pos.x);
-        h_clusters_positions_half[i].y = __float2half(clusters[active_region[i]].pos.y);
-        h_clusters_positions_half[i].z = __float2half(clusters[active_region[i]].pos.z);
-    }
     //MOVE NON CHANGEABLE THINGS TO CONSTANT MEMORY
-    //TODO depending on the result of printing we can get away with that or not
-    d_clusters_positions = h_clusters_positions_half;
 	curandState * devStates;
-	gpuErrchk(cudaMalloc((void**)&devStates, threads * blocks * sizeof(curandState)));
+	gpuErrchk(cudaMalloc((void**)&devStates, numSwarms * numParticles * numDimensions * sizeof(curandState)));
 
     // cuRand initialization
-	setupKernel<<< blocks, threads>>>(devStates, time(NULL));
+	setupKernel<<< dim3(numSwarms, numParticles), numDimensions>>>(devStates, time(NULL));
 	gpuErrchk( cudaDeviceSynchronize() );
 
-	output(2, "initial score: %lf (density=%lf)\n", score_curr, score_density);
-    std::cout << "CHROMOSOME BOUNDARIES SIZE IS : " << heatmap_chromosome_boundaries.size() << std::endl;
-    ParticleSwarmSync<<<blocks, threads>>>(
+    output(2, "initial score: %lf (density=%lf)\n", score_curr, score_density);
+    initializationKernel<<<dim3(numSwarms, numParticles), numDimensions>>>(
         devStates,
-        thrust::raw_pointer_cast(d_clusters_fixed.data()),
         thrust::raw_pointer_cast(d_clusters_positions.data()),
-        thrust::raw_pointer_cast(d_heatmap_chromosome_boundaries.data()),
-        thrust::raw_pointer_cast(d_milestone_successes.data()),
-        thrust::raw_pointer_cast(d_scores.data()),
-        score_curr,
-        settings,
-        thrust::raw_pointer_cast(d_heatmap_dist.data()),
-        clusters.size(),
-        active_region.size(),
-        heatmapSize,
-        heatmap_dist.diagonal_size,
-        heatmap_chromosome_boundaries.size(),
-        d_hasError,
-        100000
+        thrust::raw_pointer_cast(d_velocities.data())
     );
+    fitnessKernel<<<dim3(numSwarms, numParticles), numDimensions>>>(
+            thrust::raw_pointer_cast(d_clusters_positions.data()),
+            thrust::raw_pointer_cast(d_fitnesses.data()),
+            thrust::raw_pointer_cast(d_clusters_fixed.data()),
+            thrust::raw_pointer_cast(d_heatmap_chromosome_boundaries.data()),
+            settings,
+            thrust::raw_pointer_cast(d_heatmap_dist.data()),
+            active_region.size(),
+            heatmapSize,
+            heatmap_dist.diagonal_size,
+            heatmap_chromosome_boundaries.size()
+    );
+    bestUpdateKernel<<<numSwarms, numParticles>>>(
+            thrust::raw_pointer_cast(d_fitnesses.data()),
+            thrust::raw_pointer_cast(d_best_fitnesses.data()),
+            thrust::raw_pointer_cast(d_global_best_fitnesses.data()),
+            thrust::raw_pointer_cast(d_clusters_positions.data()),
+            thrust::raw_pointer_cast(d_best_positions.data()),
+            thrust::raw_pointer_cast(d_global_best_positions.data()),
+            numDimensions
+    );
+    #define NUM_GENERATIONS 200
+    for(auto generation = 0; generation < NUM_GENERATIONS; ++generation) {
+        gpuErrchk( cudaDeviceSynchronize() );
+        positionUpdateKernel<<<dim3(numSwarms, numParticles), numDimensions>>>(
+                devStates,
+                thrust::raw_pointer_cast(d_clusters_positions.data()),
+                thrust::raw_pointer_cast(d_best_positions.data()),
+                thrust::raw_pointer_cast(d_velocities.data()),
+                thrust::raw_pointer_cast(d_fitnesses.data()),
+                thrust::raw_pointer_cast(d_best_fitnesses.data()),
+                thrust::raw_pointer_cast(d_global_best_fitnesses.data()),
+                thrust::raw_pointer_cast(d_global_best_positions.data()),
+                NUM_GENERATIONS, 
+                generation
+        );
+        fitnessKernel<<<dim3(numSwarms, numParticles), numDimensions>>>(
+                thrust::raw_pointer_cast(d_clusters_positions.data()),
+                thrust::raw_pointer_cast(d_fitnesses.data()),
+                thrust::raw_pointer_cast(d_clusters_fixed.data()),
+                thrust::raw_pointer_cast(d_heatmap_chromosome_boundaries.data()),
+                settings,
+                thrust::raw_pointer_cast(d_heatmap_dist.data()),
+                active_region.size(),
+                heatmapSize,
+                heatmap_dist.diagonal_size,
+                heatmap_chromosome_boundaries.size()
+        );
+        bestUpdateKernel<<<numSwarms, numParticles>>>(
+                thrust::raw_pointer_cast(d_fitnesses.data()),
+                thrust::raw_pointer_cast(d_best_fitnesses.data()),
+                thrust::raw_pointer_cast(d_global_best_fitnesses.data()),
+                thrust::raw_pointer_cast(d_clusters_positions.data()),
+                thrust::raw_pointer_cast(d_best_positions.data()),
+                thrust::raw_pointer_cast(d_global_best_positions.data()),
+                numDimensions
+        );
+    }
 
     gpuErrchk( cudaPeekAtLastError() );
     gpuErrchk( cudaDeviceSynchronize() );
@@ -514,12 +505,12 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     milestone_success = h_milestone_successes[0];
     // TODO may require a copying kernel
     //h_clusters_positions = d_clusters_positions;
-    h_clusters_positions_half = d_clusters_positions;
+    h_clusters_positions = d_clusters_positions;
     #pragma unroll 58
     for(int i = 0; i < active_region.size(); ++i) {
-        clusters[active_region[i]].pos.x = __half2float(h_clusters_positions_half[i].x);
-        clusters[active_region[i]].pos.y = __half2float(h_clusters_positions_half[i].y);
-        clusters[active_region[i]].pos.z = __half2float(h_clusters_positions_half[i].z);
+        clusters[active_region[i]].pos.x = __half2float(h_clusters_positions[i].x);
+        clusters[active_region[i]].pos.y = __half2float(h_clusters_positions[i].y);
+        clusters[active_region[i]].pos.z = __half2float(h_clusters_positions[i].z);
     }
     printf("===========================================================");
     printf("CPU SCORE IS %f \n", calcScoreHeatmapActiveRegion());
