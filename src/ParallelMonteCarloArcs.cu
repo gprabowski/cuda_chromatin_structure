@@ -105,7 +105,8 @@ __device__ void subtractFromVector3(half3& destination, half3& value1, half3& va
 }
 
 __device__ float magnitude(half3& vector) {
-    return __half2float(hsqrt(__hmul(vector.x, vector.x) + __hmul(vector.y, vector.y) + __hmul(vector.z, vector.z)));
+    float x = __half2float(vector.x), y = __half2float(vector.y), z = __half2float(vector.z);
+    return sqrtf(x*x + y*y + z*z);
 }
 
 //this function uses following external funcitonality / data
@@ -325,7 +326,7 @@ __global__ void MonteCarloHeatmapKernel(
                        heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx));
                 }
         curr_vector = clusters_positions[warpIdx];
-        #define N 180
+        #define N 512
         #pragma unroll
         for(int i = 0; i < N; ++i) {
             if (clusters_fixed[warpIdx]) *error = true;
@@ -359,20 +360,21 @@ __global__ void MonteCarloHeatmapKernel(
             f_winner = score_curr;
             #pragma unroll 5
             for (int offset = 16; offset > 0; offset /= 2)
-                f_winner = __shfl_down_sync(FULL_MASK, f_winner, offset);
+                f_winner = fminf(f_winner, __shfl_down_sync(FULL_MASK, f_winner, offset));
             //propagate and check who's the lucky one
+            __syncwarp();
             __shfl_sync(FULL_MASK, f_winner, 0);
             if(f_winner == score_curr) {
         #endif
             // TODO doubling of the same work here -> memoization or specialized function for this point
-            mutex_lock(&mutex);
+            //mutex_lock(&mutex);
             if(calcScoreHeatmapSingleActiveRegion(warpIdx, clusters_positions, heatmap_chromosome_boundaries, 
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_vector, warpIdx) <
                 calcScoreHeatmapSingleActiveRegion(warpIdx, clusters_positions, heatmap_chromosome_boundaries, 
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx)) {
                     clusters_positions[warpIdx] = curr_vector;
                 }
-            mutex_unlock(&mutex);
+            //mutex_unlock(&mutex);
         }
         // TODO THREADFENCE OR THREADFENCE BLOCK
         __threadfence();
@@ -385,7 +387,7 @@ __global__ void MonteCarloHeatmapKernel(
         // check if we should stop
         // make sure that Settings::MCstopConditionSteps is divisible by N
         // 32767 = 32768 - 1, which is a power of 2
-        if (iterations % 3600 == 0) {
+        if (iterations % 16384 == 0) {
             //if ((score_curr > Settings::MCstopConditionImprovementHeatmap * milestone_score &&
              //       milestone_success < Settings::MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
                 
@@ -489,6 +491,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         score_curr,
         settings,
         thrust::raw_pointer_cast(d_heatmap_dist.data()),
+        // TODO BIG STEP SIZE FOR BIG CHROMOSOMES SMALL FOR SMALL
         0.1f * step_size,
         clusters.size(),
         active_region.size(),
