@@ -114,6 +114,44 @@ __device__ void getChromosomeHeatmapBoundary(const int p, int &start, int &end, 
 	}
 }
 
+__inline__ __device__
+float warpReduceMin(float val) {
+    __syncwarp();
+    unsigned mask = __activemask(); 
+    #if __CUDA_ARCH__ >= 800
+        val = __reduce_min_sync(mask, val);
+    #else
+        #pragma unroll 5
+        for (int offset = 16; offset > 0; offset /= 2)
+            val = fminf(val, __shfl_down_sync(mask, val, offset));
+        //propagate and check who's the lucky one
+        __syncwarp();
+        val = __shfl_sync(mask, val, 0);
+    #endif
+    return val;
+}
+
+// FOR AT MOST 32 WARPS PER BLOCK
+__inline__ __device__
+float blockReduceMin(float val) {
+  static __shared__ float shared[32]; // Shared mem for 32 partial sums
+  int lane = threadIdx.x % warpSize;
+  int wid = threadIdx.x / warpSize;
+
+  val = warpReduceMin(val);     // Each warp performs partial reduction
+
+  if (lane==0) shared[wid]=val; // Write reduced value to shared memory
+
+  __syncthreads();              // Wait for all partial reductions
+
+  //read from shared memory only if that warp existed
+  val = (threadIdx.x < blockDim.x / warpSize) ? shared[lane] : FLT_MAX;
+
+  if (wid==0) { shared[lane] = warpReduceMin(val); }//Final reduce within first warp
+  __syncthreads();
+  return shared[0];
+}
+
 __device__ float calcScoreHeatmapSingleActiveRegion(
     const int moved, 
     half3* __restrict__ clusters_positions, 
@@ -309,19 +347,13 @@ __global__ void MonteCarloHeatmapKernel(
         
         //find the best move
         __syncwarp();
-        #define FULL_MASK 0xffffffff
         #if __CUDA_ARCH__ >= 800
             i_score = (int)score_curr; 
-            i_winner = __reduce_min_sync(mask, score_red);
+            i_winner = blockReduceMin(i_winner);
             if(i_winner == i_score) {
         #else
             f_winner = score_curr;
-            #pragma unroll 5
-            for (int offset = 16; offset > 0; offset /= 2)
-                f_winner = fminf(f_winner, __shfl_down_sync(FULL_MASK, f_winner, offset));
-            //propagate and check who's the lucky one
-            __syncwarp();
-            f_winner  = __shfl_sync(FULL_MASK, f_winner, 0);
+            f_winner = blockReduceMin(f_winner);
             if(f_winner == score_curr) {
         #endif
             // TODO doubling of the same work here -> memoization or specialized function for this point
@@ -329,13 +361,6 @@ __global__ void MonteCarloHeatmapKernel(
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_vector, warpIdx) <
                 calcScoreHeatmapSingleActiveRegion(warpIdx, local_clusters_positions, heatmap_chromosome_boundaries, 
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx)) {
-                    #if __CUDA_ARCH__ >= 800
-                    if(i_winner < block_winner) {
-                        block_winner = i_winner;
-                    #else
-                    if(f_winner < block_winner) {
-                        block_winner = f_winner;
-                    #endif
                         local_clusters_positions[warpIdx] = curr_vector;
                         clusters_positions[warpIdx] = curr_vector;
                     }
