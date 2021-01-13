@@ -282,7 +282,7 @@ __global__ void MonteCarloHeatmapKernel(
     const float score,
 	gpu_settings settings,
 	float * __restrict__ heatmap_dist,
-    const float step_size,
+    float step_size,
     const int numberOfClusters,
     const int activeRegionSize,
     const int heatmapSize,
@@ -300,8 +300,8 @@ __global__ void MonteCarloHeatmapKernel(
     extern __shared__ float s_heatmap_dist[];
     
     int threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
-    int warpIdx = blockIdx.x % activeRegionSize;
-    //int warpIdx = (threadIndex / warpSize) % activeRegionSize;
+    //int warpIdx = blockIdx.x % activeRegionSize;
+    int warpIdx = (threadIndex / warpSize) % activeRegionSize;
     half3 curr_vector;
     half3 displacement;
 	float score_curr = score;
@@ -347,7 +347,8 @@ __global__ void MonteCarloHeatmapKernel(
             score_curr = score_prev;
             subtractFromVector(curr_vector, displacement);
         }
-        T *= 0.9999;
+        T *= 0.999;
+        step_size *= 0.95;
         iterations += N;
         //find the best move
         __syncwarp();
@@ -407,7 +408,7 @@ __global__ void MonteCarloHeatmapKernel(
 
 
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
-    const int blocks = active_region.size();
+    const int blocks = active_region.size() * 8;
     const int threads = 256;
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
@@ -492,7 +493,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         settings,
         thrust::raw_pointer_cast(d_heatmap_dist.data()),
         // TODO BIG STEP SIZE FOR BIG CHROMOSOMES SMALL FOR SMALL
-        0.1f * step_size,
+        0.75f * step_size,
         clusters.size(),
         active_region.size(),
         heatmapSize,
