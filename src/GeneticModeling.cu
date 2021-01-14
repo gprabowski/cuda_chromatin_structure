@@ -341,7 +341,7 @@ __global__ void geneticHeatmap(
 				}
 			}
 			__syncwarp();
-
+ 
 			localChromosome = &population[threadIdx.x * clusterSize];
 
 			// fitness evaluation
