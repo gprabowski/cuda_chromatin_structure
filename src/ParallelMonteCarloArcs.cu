@@ -288,7 +288,8 @@ __global__ void MonteCarloHeatmapKernel(
     const int heatmapSize,
     const int heatmapDiagonalSize,
     const int chromosomeBoundariesSize,
-    bool * __restrict__ error
+    bool * __restrict__ error,
+    bool * __restrict__ isDone
 ) {
     int iterations = 0;
     //TODO bring these back or delete them
@@ -306,6 +307,9 @@ __global__ void MonteCarloHeatmapKernel(
     half3 displacement;
 	float score_curr = score;
     float score_prev = score_curr;
+    float milestoneScore = score_curr;
+    int improvementMisses = 0;
+
     __shared__ unsigned int mutex;
     #if __CUDA_ARCH >= 800
         int i_winner;
@@ -321,10 +325,6 @@ __global__ void MonteCarloHeatmapKernel(
     __syncthreads();
     // MOVE ALL RELEVANT POSITIONS INTO THE LOCAL MEM
     while(true) {
-        if(threadIndex == 0) {
-                  printf("GPU CALC FUNCTION VERIFICATION\n CPU SCORE: %f GPU SCORE %f \n", score, calcScoreHeatmapActiveRegion(-1, clusters_positions, heatmap_chromosome_boundaries, 
-                       heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx));
-                }
         curr_vector = clusters_positions[warpIdx];
         #define N 512
         #pragma unroll
@@ -385,21 +385,25 @@ __global__ void MonteCarloHeatmapKernel(
             score_curr = f_winner;
         #endif
         score_prev = score_curr;
+        
         // check if we should stop
-        // make sure that Settings::MCstopConditionSteps is divisible by N
-        // 32767 = 32768 - 1, which is a power of 2
-        if (iterations % 16384 == 0) {
-            //if ((score_curr > Settings::MCstopConditionImprovementHeatmap * milestone_score &&
-             //       milestone_success < Settings::MCstopConditionMinSuccessesHeatmap) || score_curr < 1e-6) {
-                
-                scores[0] = score_curr;
-                break;
-            //}
-            //else {
-            //    milestone_score = score_curr;
-           // }
+        if(threadIndex == 0) {
+            score_curr = calcScoreHeatmapActiveRegion(-1, clusters_positions, heatmap_chromosome_boundaries, 
+                heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx);
+
+            printf("GPU CALC FUNCTION VERIFICATION\n CPU SCORE: %f GPU SCORE %f \n", score, score_curr);
             
+            if(score_curr > 0.9999 * milestoneScore) ++improvementMisses;
+
+            if(improvementMisses >= 3 || score_curr < 1e-04) {
+                scores[0] = score_curr;
+                *isDone = true;
+            }
+
+            milestoneScore = score_curr;
         }
+
+        if(*isDone) return;
     }
     state[threadIndex] = localState;
 }
@@ -427,10 +431,12 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
 	// calc initial score
 	score_curr = calcScoreHeatmapActiveRegion();	// score from heatmap
 	score_density = calcScoreDensity();
-	bool * d_hasError;
+	bool * d_hasError, * d_isDone;
     bool h_hasError;
 
+    cudaMalloc((void**)&d_isDone, sizeof(bool));
     cudaMalloc((void**)&d_hasError, sizeof(bool));
+    cudaMemset(d_isDone, 0, sizeof(bool));
     cudaMemset(d_hasError, 0, sizeof(bool));
     
     struct gpu_settings settings;
@@ -499,7 +505,8 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         heatmapSize,
         heatmap_dist.diagonal_size,
         heatmap_chromosome_boundaries.size(),
-        d_hasError
+        d_hasError,
+        d_isDone
     );
 
     gpuErrchk( cudaPeekAtLastError() );
@@ -514,13 +521,13 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     // TODO may require a copying kernel
     //h_clusters_positions = d_clusters_positions;
     h_clusters_positions_half = d_clusters_positions;
-    #pragma unroll 58
+    // #pragma unroll 58
     for(int i = 0; i < active_region.size(); ++i) {
         clusters[active_region[i]].pos.x = __half2float(h_clusters_positions_half[i].x);
         clusters[active_region[i]].pos.y = __half2float(h_clusters_positions_half[i].y);
         clusters[active_region[i]].pos.z = __half2float(h_clusters_positions_half[i].z);
     }
-    printf("===========================================================");
+    printf("===========================================================\n");
     printf("CPU SCORE IS %f \n", calcScoreHeatmapActiveRegion());
 	// TODO: do we need more cudaFree?
 	cudaFree(d_hasError);
