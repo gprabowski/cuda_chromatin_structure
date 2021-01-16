@@ -6,7 +6,7 @@
  */
 
 #include "../include/LooperSolver.h"
-#include "ParallelMonteCarloArcs.cu"
+#include "ParallelMonteCarloHeatmap.cu"
 
 LooperSolver::LooperSolver(string label, string outdir) {
 
@@ -351,8 +351,8 @@ void LooperSolver::reconstructClustersHeatmapSingleLevel(int level) {
 		}
 
 		output(2, "MC, heatmap, level %d, run %d/%d\n", level, k+1, steps);
-		score = ParallelMonteCarloHeatmap(avg_dist);
-		// score = MonteCarloHeatmap(avg_dist);
+		// score = ParallelMonteCarloHeatmap(avg_dist);
+		score = MonteCarloHeatmap(avg_dist);
 		output(2, "score = %lf %lf\n", score, best_score);
 		if (Settings::useDensity) {
 			score = MonteCarloHeatmapAndDensity(avg_dist);
