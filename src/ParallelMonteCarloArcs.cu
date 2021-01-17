@@ -266,8 +266,11 @@ __global__ void initializationKernel(
     half3 * velocities
 ) {
     int posID = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
-    randomVector(positions[posID], 150.0f, false, (state + posID));
-    randomVector(velocities[posID], 300.0f, false, (state + posID));
+    // update the initially given positon 
+    half3 rnd;
+    randomVector(rnd, 30.0f, false, (state + posID));
+    addToVector(positions[posID], rnd);
+    randomVector(velocities[posID], 60.0f, false, (state + posID));
 }
 
 __global__ void positionUpdateKernel(
@@ -291,8 +294,10 @@ __global__ void positionUpdateKernel(
     #define C2 2.05
     int posID = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
     float inertia = WMAX - ((WMAX - WMIN) / maxGenerations) * generation;
-    add3Vectors(velocities[posID], multiplyVector(velocities[posID], inertia), multiplyVector(subtractAndReturnVector(global_best_positions[blockIdx.x], positions[posID]), curand_uniform(state + posID) * C1),
-                            multiplyVector(subtractAndReturnVector(local_best_positions[posID], positions[posID]), curand_uniform(state + posID) * C2));
+    half3 temp1 = multiplyVector(velocities[posID], inertia);
+    half3 temp2 = multiplyVector(subtractAndReturnVector(global_best_positions[blockIdx.x], positions[posID]), curand_uniform(state + posID) * C1);
+    half3 temp3 = multiplyVector(subtractAndReturnVector(local_best_positions[posID], positions[posID]), curand_uniform(state + posID) * C2);
+    add3Vectors(velocities[posID], temp1, temp2, temp3);
     addToVector(positions[posID], velocities[posID]);
 }
 
@@ -311,7 +316,9 @@ __global__ void fitnessKernel(
     // whole block is responsible for one particle 
     // set of blocks in a swarm is responsible for a swarm
     int posID = (blockIdx.x * gridDim.y + blockIdx.y) * blockDim.x + threadIdx.x;
-    float local_score = calcScoreHeatmapSingleActiveRegion(threadIdx.x, positions + posID - threadIdx.x, heatmap_chromosome_boundaries, 
+    float local_score = 0;
+    if(threadIdx.x < activeRegionSize)
+        local_score = calcScoreHeatmapSingleActiveRegion(threadIdx.x, positions + posID - threadIdx.x, heatmap_chromosome_boundaries, 
         heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, positions[posID], threadIdx.x);
     __syncthreads();
     local_score = blockReduceAdd(local_score);
@@ -333,7 +340,7 @@ __global__ void bestUpdateKernel(
     // one thread per particle
     int particleID = blockIdx.x * blockDim.x + threadIdx.x;
     // for each particle check if current fitness < local_best_fitness
-    if(local_best_fitnesses[particleID] > fitnesses[particleID]) {
+    if(local_best_fitnesses[particleID] >= fitnesses[particleID]) {
         local_best_fitnesses[particleID] = fitnesses[particleID];
         // easily parallelizable
         for(int i = 0; i < numDimensions; ++i) {
@@ -346,9 +353,6 @@ __global__ void bestUpdateKernel(
     float local_best = local_best_fitnesses[particleID];
     __syncwarp();
     float total_local_best = blockReduceMin(local_best);
-    if(total_local_best == local_best) {
-        printf("YOOOOOOOOOOOO\n");
-    }
     __syncthreads();
     if(total_local_best < global_best_fitnesses[blockIdx.x] && local_best == total_local_best) {
         global_best_fitnesses[blockIdx.x] = local_best;
@@ -360,7 +364,7 @@ __global__ void bestUpdateKernel(
 
 float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     const auto numSwarms = 32;
-    const auto numParticles = 26;
+    const auto numParticles = 320;
     const auto numDimensions = active_region.size();
     // const int blocks = Settings::numberOfBlocks;
     // const int threads = Settings::numberOfThreads;
@@ -412,7 +416,14 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
     thrust::device_vector<half3> d_clusters_positions(numSwarms * numParticles * numDimensions);
     thrust::device_vector<half3> d_velocities(numSwarms * numParticles * numDimensions);
 
-
+    for(int j = 0; j < numSwarms * numParticles; ++j){
+        for(int i = 0; i < active_region.size(); ++i) {
+            h_clusters_positions[j * active_region.size() + i].x = clusters[active_region[i]].pos.x;
+            h_clusters_positions[j * active_region.size() + i].y = clusters[active_region[i]].pos.y;
+            h_clusters_positions[j * active_region.size() + i].z = clusters[active_region[i]].pos.z;
+        }
+    }
+    d_clusters_positions = h_clusters_positions;
     thrust::device_vector<int> d_heatmap_chromosome_boundaries(heatmap_chromosome_boundaries);
     thrust::device_vector<bool> d_clusters_fixed = h_clusters_fixed;
 	thrust::device_vector<int> d_milestone_successes(1, 0); 
@@ -456,7 +467,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
             thrust::raw_pointer_cast(d_global_best_positions.data()),
             numDimensions
     );
-    #define NUM_GENERATIONS 200
+    #define NUM_GENERATIONS 20000
     for(auto generation = 0; generation < NUM_GENERATIONS; ++generation) {
         gpuErrchk( cudaDeviceSynchronize() );
         positionUpdateKernel<<<dim3(numSwarms, numParticles), numDimensions>>>(
@@ -468,10 +479,10 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
                 thrust::raw_pointer_cast(d_best_fitnesses.data()),
                 thrust::raw_pointer_cast(d_global_best_fitnesses.data()),
                 thrust::raw_pointer_cast(d_global_best_positions.data()),
-                NUM_GENERATIONS, 
-                generation
+                generation,
+                NUM_GENERATIONS
         );
-        fitnessKernel<<<dim3(numSwarms, numParticles), numDimensions>>>(
+        fitnessKernel<<<dim3(numSwarms, numParticles), numDimensions + 32 - numDimensions % 32>>>(
                 thrust::raw_pointer_cast(d_clusters_positions.data()),
                 thrust::raw_pointer_cast(d_fitnesses.data()),
                 thrust::raw_pointer_cast(d_clusters_fixed.data()),
@@ -493,7 +504,12 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
                 numDimensions
         );
     }
-
+    gpuErrchk(cudaDeviceSynchronize());
+    h_best_fitnesses = d_best_fitnesses;
+    for(int i = 0; i < numSwarms; ++i) {
+        printf(" %f ", h_best_fitnesses[i]);
+    }
+    printf("\n");
     gpuErrchk( cudaPeekAtLastError() );
     gpuErrchk( cudaDeviceSynchronize() );
     cudaMemcpy(&h_hasError, d_hasError, sizeof(bool), cudaMemcpyDeviceToHost);
