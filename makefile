@@ -19,6 +19,7 @@ CC_LIBS=
 
 NVCC=nvcc
 NVCC_FLAGS= -arch=sm_75 --std c++17
+# NVCC_FLAGS= -arch=sm_80 --std c++17
 NVCC_LIBS=
 
 # CUDA library directory:
@@ -48,7 +49,7 @@ LIB_DIR = src/lib
 ## Make variables ##
 
 # Target executable name:
-EXE = 3dnome
+EXE = 3dnome_gpu
 
 # Object files:
 OBJS = $(OBJ_DIR)/main.o $(OBJ_DIR)/Anchor.o $(OBJ_DIR)/BedRegion.o $(OBJ_DIR)/BedRegions.o $(OBJ_DIR)/Chromosome.o $(OBJ_DIR)/ChromosomesSet.o $(OBJ_DIR)/Cluster.o $(OBJ_DIR)/Density.o $(OBJ_DIR)/Heatmap.o $(OBJ_DIR)/HierarchicalChromosome.o $(OBJ_DIR)/InteractionArc.o $(OBJ_DIR)/InteractionArcs.o $(OBJ_DIR)/LooperSolver.o $(OBJ_DIR)/Settings.o $(OBJ_DIR)/common.o $(OBJ_DIR)/ini.o $(OBJ_DIR)/INIReader.o $(OBJ_DIR)/mtxlib.o $(OBJ_DIR)/rmsd.o

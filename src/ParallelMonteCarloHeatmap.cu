@@ -217,7 +217,7 @@ __global__ void MonteCarloHeatmapKernel(
     float milestoneScore = score_curr;
     // __shared__ unsigned int mutex;
 
-    #if __CUDA_ARCH >= 800
+    #if __CUDA_ARCH__ >= 800
         int i_winner;
         int i_score;
     #else
@@ -259,7 +259,7 @@ __global__ void MonteCarloHeatmapKernel(
         #define FULL_MASK 0xffffffff
         #if __CUDA_ARCH__ >= 800
             i_score = (int)score_curr; 
-            i_winner = __reduce_min_sync(mask, score_red);
+            i_winner = __reduce_min_sync(FULL_MASK, i_score);
             if(i_winner == i_score) {
         #else
             f_winner = score_curr;
@@ -313,9 +313,12 @@ __global__ void MonteCarloHeatmapKernel(
     state[threadIndex] = localState;
 }
 
-float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
-    const int blocks = active_region.size() * 8;
-    const int threads = 256;
+float LooperSolver::ParallelMonteCarloHeatmap(float step_size, int numBlocks, int numThreads) {
+    // const int blocks = active_region.size() * 8;
+    // const int threads = 256;
+
+    const int blocks = numBlocks;
+    const int threads = numThreads;
     
 	double T = Settings::maxTempHeatmap;		// set current temperature to max
 	double score_curr;

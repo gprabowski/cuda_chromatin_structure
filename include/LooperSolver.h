@@ -12,7 +12,7 @@
 #include <string>
 #include <queue>
 #include <stdarg.h>
-
+#include <fstream>
 
 #include "InteractionArc.h"
 #include "InteractionArcs.h"
@@ -140,7 +140,7 @@ public:
 	int findClusterForGenomicPosition(string chr, int pos);	// find current_level-index of the specified positions
 	int findCurrentLevelForGenomicPosition(string chr, int pos);	// find current_level-index of the specified positions
 
-	float ParallelMonteCarloHeatmap(float step_size);
+	float ParallelMonteCarloHeatmap(float step_size, int numBlocks, int numThreads);
 	double MonteCarloHeatmap(float step_size);
 	double MonteCarloHeatmapAndDensity(float step_size);
 
