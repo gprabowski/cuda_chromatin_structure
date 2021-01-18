@@ -499,7 +499,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {
         heatmap_dist.diagonal_size,
         heatmap_chromosome_boundaries.size(),
         d_hasError,
-        10000
+        500000
     );
 
     gpuErrchk( cudaPeekAtLastError() );
