@@ -12,7 +12,7 @@
 #include <string>
 #include <queue>
 #include <stdarg.h>
-
+#include <fstream>
 
 #include "InteractionArc.h"
 #include "InteractionArcs.h"

@@ -351,9 +351,31 @@ void LooperSolver::reconstructClustersHeatmapSingleLevel(int level) {
 		}
 
 		output(2, "MC, heatmap, level %d, run %d/%d\n", level, k+1, steps);
-		// score = ParallelMonteCarloHeatmap(avg_dist);
-		score = MonteCarloHeatmap(avg_dist);
+
+		std::clock_t start;
+		double duration;
+		ofstream times, scores;
+
+		start = std::clock();
+		score = ParallelMonteCarloHeatmap(avg_dist);
+		// score = MonteCarloHeatmap(avg_dist);
+		
+		duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
+		
+		std::cout << "TIME: " << duration << " seconds" << std::endl;
 		output(2, "score = %lf %lf\n", score, best_score);
+
+		times.open("times_gpu.txt", std::ios_base::app);
+		scores.open("scores_gpu.txt", std::ios_base::app);
+		  
+		times << duration << std::endl;
+		scores << score << std::endl;
+		  
+		times.close();
+		scores.close();
+
+		exit(0);
+	
 		if (Settings::useDensity) {
 			score = MonteCarloHeatmapAndDensity(avg_dist);
 			output(2, "score (density) = %lf %lf\n", score, best_score);
