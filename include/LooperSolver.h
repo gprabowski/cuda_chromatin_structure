@@ -140,7 +140,7 @@ public:
 	int findClusterForGenomicPosition(string chr, int pos);	// find current_level-index of the specified positions
 	int findCurrentLevelForGenomicPosition(string chr, int pos);	// find current_level-index of the specified positions
 
-	float ParallelMonteCarloHeatmap(float step_size, int numBlocks, int numThreads);
+	float ParallelMonteCarloHeatmap(float step_size);
 	double MonteCarloHeatmap(float step_size);
 	double MonteCarloHeatmapAndDensity(float step_size);
 

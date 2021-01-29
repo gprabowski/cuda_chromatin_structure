@@ -29,7 +29,8 @@ struct gpu_settings {
     float MCstopConditionImprovementHeatmap;
 	bool use2D;
 	float tempJumpCoefHeatmap;
-	float tempJumpScaleHeatmap;
+    float tempJumpScaleHeatmap;
+    int milestoneFailsThreshold;
 };
 
 struct __align__(8) half3{
@@ -94,9 +95,6 @@ __device__ float magnitude(const half3& vector) {
     return sqrtf(x*x + y*y + z*z);
 }
 
-//this function uses following external funcitonality / data
-// -> size of heatmap_chromosome_boundaries
-// -> the entire heatmap_chromosome_boundaries
 __device__ void getChromosomeHeatmapBoundary(const int p, int &start, int &end, int* gpu_heatmap_chromosome_boundaries, const int& chromosomeBoundariesSize) {
 	if (chromosomeBoundariesSize == 0) return;
 	if (p < 0 || p > gpu_heatmap_chromosome_boundaries[chromosomeBoundariesSize - 1]) return;
@@ -128,8 +126,6 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
     if (heatmapSize != activeRegionSize) { printf("heatmap sizes mismatch, dist size=%d, active region=%d", heatmapSize, activeRegionSize); return 0.0; }
     half3 temp_one;
     
-    // TODO can we precompute?
-    // array with start and end 
     if(chromosomeBoundariesSize > 0) {
         getChromosomeHeatmapBoundary(moved, st, end, gpu_heatmap_chromosome_boundaries, chromosomeBoundariesSize);
     }
@@ -147,18 +143,6 @@ __device__ float calcScoreHeatmapSingleActiveRegion(
     return err;
 }
 
-//this function uses following
-//	-> size of the active region
-//	-> the whole active region array
-//	heatmap_dist
-//		-> size
-//		-> diagonal size
-//		-> entire v 2d array (column at once)
-//	heatmap_chromosome_boundaries	
-//		-> size
-// getChromosomeBoundary
-// entire active region array
-// all positions from the clusters 
 __device__ float calcScoreHeatmapActiveRegion(
     const int moved, 
     half3 * __restrict__ clusters_positions, 
@@ -299,11 +283,11 @@ __global__ void MonteCarloHeatmapKernel(
             score_curr = calcScoreHeatmapActiveRegion(-1, clusters_positions, heatmap_chromosome_boundaries, 
                 heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, *(clusters_positions + warpIdx), warpIdx);
 
-            printf("GPU SCORE %f \n", score_curr);
+            printf("Milestone score: %f \n", score_curr);
             
             if(score_curr > settings.MCstopConditionImprovementHeatmap * milestoneScore) ++improvementMisses;
 
-            if(improvementMisses >= 3 || score_curr < 1e-04) *isDone = true;
+            if(improvementMisses >= settings.milestoneFailsThreshold || score_curr < 1e-04) *isDone = true;
 
             milestoneScore = score_curr;
         }
@@ -313,17 +297,14 @@ __global__ void MonteCarloHeatmapKernel(
     state[threadIndex] = localState;
 }
 
-float LooperSolver::ParallelMonteCarloHeatmap(float step_size, int numBlocks, int numThreads) {
-    // const int blocks = active_region.size() * 8;
-    // const int threads = 256;
-
-    const int blocks = numBlocks;
-    const int threads = numThreads;
+float LooperSolver::ParallelMonteCarloHeatmap(float step_size) {    
+    int threads = Settings::cudaThreadsPerBlock;
+    int blocks = Settings::cudaBlocksMultiplier * active_region.size();
     
 	double T = Settings::maxTempHeatmap;		// set current temperature to max
 	double score_curr;
 	double score_density;
-	string chr; 				// tmp variable to keep track to which chromosome a specific point belongs
+	string chr;
     int size = active_region.size();
     int heatmapSize = heatmap_dist.size;
 
@@ -343,6 +324,7 @@ float LooperSolver::ParallelMonteCarloHeatmap(float step_size, int numBlocks, in
     settings.use2D = Settings::use2D;
     settings.dtTempHeatmap = Settings::dtTempHeatmap;
     settings.MCstopConditionImprovementHeatmap = Settings::MCstopConditionImprovementHeatmap;
+    settings.milestoneFailsThreshold = Settings::milestoneFailsThreshold;
 	
 	thrust::host_vector<bool> h_clusters_fixed(active_region.size());
     thrust::host_vector<half3> h_clusters_positions_half(active_region.size());

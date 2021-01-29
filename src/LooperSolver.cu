@@ -352,42 +352,10 @@ void LooperSolver::reconstructClustersHeatmapSingleLevel(int level) {
 
 		output(2, "MC, heatmap, level %d, run %d/%d\n", level, k+1, steps);
 
-		std::clock_t start;
-		double duration;
-		ofstream times, scores;
-		
-		std::vector<int> threads = { 128, 256, 512 };
-		std::vector<int> blocks = { 4, 8, 16 };
+		score = ParallelMonteCarloHeatmap(avg_dist);
 
-		for(int block: blocks) {
-			for(int thread: threads) {
-				// random initial position (use initial_structure and add some noise)
-				for (size_t i = 0; i < active_region.size(); ++i) {
-					clusters[active_region[i]].pos = initial_structure[i] + random_vector(avg_dist, Settings::use2D) ;
-				}
-				
-				start = std::clock();
-				score = ParallelMonteCarloHeatmap(avg_dist, block * active_region.size(), thread);
-				// score = MonteCarloHeatmap(avg_dist);
-				
-				duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
-				
-				std::cout << "TIME: " << duration << " seconds" << std::endl;
-				output(2, "score = %lf %lf\n", score, best_score);
+		output(2, "score = %lf %lf\n", score, best_score);
 
-				times.open("times_gpu_" + to_string(thread) + "_" + to_string(block) + ".txt", std::ios_base::app);
-				scores.open("scores_gpu_" + to_string(thread) + "_" + to_string(block) + ".txt", std::ios_base::app);
-				
-				times << duration << std::endl;
-				scores << score << std::endl;
-				
-				times.close();
-				scores.close();
-			}
-		}
-
-		exit(0);
-	
 		if (Settings::useDensity) {
 			score = MonteCarloHeatmapAndDensity(avg_dist);
 			output(2, "score (density) = %lf %lf\n", score, best_score);

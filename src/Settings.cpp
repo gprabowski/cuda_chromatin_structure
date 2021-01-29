@@ -14,6 +14,10 @@ int Settings::debug;
 int Settings::outputLevel;
 bool Settings::randomWalk;
 
+int Settings::milestoneFailsThreshold;
+int Settings::cudaBlocksMultiplier;
+int Settings::cudaThreadsPerBlock;
+
 bool Settings::useCTCFMotifOrientation;
 bool Settings::motifsSymmetric;
 float Settings::motifOrientationWeigth;
@@ -158,6 +162,10 @@ void Settings::init() {
 	useInputCache = true;
 
 	loopDensity = 5;
+
+	milestoneFailsThreshold = 3;
+	cudaBlocksMultiplier = 4;
+	cudaThreadsPerBlock = 256;
 
 	useCTCFMotifOrientation = false;
 	motifsSymmetric = true;
@@ -376,6 +384,10 @@ bool Settings::loadFromINI(std::string ini_path) {
 		return false;
 	}
 
+	cudaBlocksMultiplier = reader.GetInteger("cuda", "blocks_multiplier", cudaBlocksMultiplier);
+	cudaThreadsPerBlock = reader.GetInteger("cuda", "num_threads", cudaThreadsPerBlock);
+	milestoneFailsThreshold = reader.GetInteger("cuda", "milestone_fails", milestoneFailsThreshold);
+
 	//debug = reader.GetInteger("main", "debug", debug);
 	outputLevel = reader.GetInteger("main", "output_level", outputLevel);
 	randomWalk = reader.GetBoolean("main", "random_walk", randomWalk);
@@ -493,7 +505,6 @@ bool Settings::loadFromINI(std::string ini_path) {
 	MCstopConditionStepsHeatmapDensity = reader.GetInteger("simulation_heatmap_density", "stop_condition_steps_heatmap", MCstopConditionStepsHeatmapDensity);
 	MCstopConditionImprovementHeatmapDensity = (float)reader.GetReal("simulation_heatmap_density", "stop_condition_improvement_threshold_heatmap", MCstopConditionImprovementHeatmapDensity);
 	MCstopConditionMinSuccessesHeatmapDensity = reader.GetInteger("simulation_heatmap_density", "stop_condition_successes_threshold_heatmap", MCstopConditionMinSuccessesHeatmapDensity);
-
 
 	maxTemp = (float)reader.GetReal("simulation_arcs", "max_temp", maxTemp);
 	dtTemp = (float)reader.GetReal("simulation_arcs", "delta_temp", dtTemp);

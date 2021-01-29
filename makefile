@@ -18,7 +18,7 @@ CC_LIBS=
 ## NVCC COMPILER OPTIONS ##
 
 NVCC=nvcc
-NVCC_FLAGS= -arch=sm_75 --std c++17
+NVCC_FLAGS= -arch=sm_75 --std c++17 --use_fast_math
 # NVCC_FLAGS= -arch=sm_80 --std c++17
 NVCC_LIBS=
 
@@ -49,7 +49,7 @@ LIB_DIR = src/lib
 ## Make variables ##
 
 # Target executable name:
-EXE = 3dnome_gpu
+EXE = 3dnome
 
 # Object files:
 OBJS = $(OBJ_DIR)/main.o $(OBJ_DIR)/Anchor.o $(OBJ_DIR)/BedRegion.o $(OBJ_DIR)/BedRegions.o $(OBJ_DIR)/Chromosome.o $(OBJ_DIR)/ChromosomesSet.o $(OBJ_DIR)/Cluster.o $(OBJ_DIR)/Density.o $(OBJ_DIR)/Heatmap.o $(OBJ_DIR)/HierarchicalChromosome.o $(OBJ_DIR)/InteractionArc.o $(OBJ_DIR)/InteractionArcs.o $(OBJ_DIR)/LooperSolver.o $(OBJ_DIR)/Settings.o $(OBJ_DIR)/common.o $(OBJ_DIR)/ini.o $(OBJ_DIR)/INIReader.o $(OBJ_DIR)/mtxlib.o $(OBJ_DIR)/rmsd.o
@@ -85,30 +85,3 @@ $(OBJ_DIR)/%.o : $(SRC_DIR)/%.cu $(INC_DIR)/%.h
 # Clean objects in object directory.
 clean:
 	$(RM) bin/* *.o $(EXE)
-
-
-
-
-
-# ORIGINAL MAKEFILE
-
-# SRC=$(wildcard src/*.cpp) $(wildcard src/lib/*.c*)
-# OBJ=$(SRC:.cpp=.o)
-
-# CFLAGS=-Wno-write-strings 
-# CFLAGSAPP=-l 3dnome -I"./src"  -L"./" -Wl,-rpath="./"
-
-# .PHONY : all
-
-# all: 3dnome 3dnome-app
-
-# 3dnome:
-# 		$(CC) $(CFLAGS) -shared $(SRC) -o lib3dnome.so
-
-# 3dnome-app:
-# 		$(CC) $(CFLAGS) main.cpp -o 3dnome $(CFLAGSAPP)
-
-# clean:
-# 		rm -fr *.o
-# 		rm lib3dnome.so
-# 		rm 3dnome

@@ -5,75 +5,81 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-chromosomes = ["chr1", "chr14", "chr21"]
-
 def test():
-    for chromosome in chromosomes:
-        for i in range(50):
-            os.system(f"./3dnome_gpu -s ./stg_gpu.ini -c {chromosome} -o ./{chromosome}/")
-            # os.system(f"./3dnome_cpu -s ./stg.ini -c {chromosome} -o ./{chromosome}/")
+    # for chromosome in ["chr1", "chr14", "chr21"]:
+    for c in range(9,23):
+        if c == 0 or c == 13 or c == 20 or c == 1:
+            continue
+        for i in range(10):
+            if not c == 22:
+                os.system(f"./3dnome_gpu -s ./stg_gpu.ini -c chr{c+1} -o ./chr{c+1}/")
+                os.system(f"./3dnome_cpu -s ./stg.ini -c chr{c+1} -o ./chr{c+1}/")
+            else:
+                os.system(f"./3dnome_gpu -s ./stg_gpu.ini -c chrX -o ./chrX/")
+                os.system(f"./3dnome_cpu -s ./stg.ini -c chrX -o ./chrX/")
 
-        os.replace("./*.txt", f"{chromosome}/")
+        os.system(f"mv ./*.txt chr{c+1}/")
 
+def aggregate(path: str):
+    times = []
+    scores = []
+    temp = 0.0
 
-def stats(file_name: str):
-    with open(file_name) as f:
-        values = [float(row) for row in f]
-        _min = min(values)
-        _max = max(values)
-        avg = np.mean(values)
-        stdev = np.std(values)
+    for fi in sorted(os.listdir(path)):
+        if ".txt" in fi:
+            with open(path + '/' + fi) as f:
+                values = [float(row) for row in f]
+                avg = str(np.mean(values))
 
-        print(f"Min: {_min}, Max: {_max}, Mean: {avg}, Std dev: {stdev}")
-
-def bar_chart():
-    c = {
-        "cpu": [1308.28172, 44.971254, 2.3483246],
-        "gpu": [4.3018849999999995, 0.8185148200000001, 0.28969110000000003]
-    }
-
-    j = { x: c[x] for x in ["cpu", "gpu"] }
-    df = pd.DataFrame(j)
-
-    # index = np.arange(len(chromosomes))
-    index = np.arange(1)
-    bar_width = 0.35
-
-    fig, ax = plt.subplots()
-
-    cpu = ax.bar(index, df["cpu"][0], bar_width, label="CPU")
-    gpu = ax.bar(index+bar_width, df["gpu"][0], bar_width, label="GPU")
-
-    # ax.set_xlabel('')
-    ax.set_ylabel("Execution Time (s)")
-    ax.set_title('CPU vs GPU performance comparison')
-    ax.set_xticks(index + bar_width / 2)
-    ax.set_xticklabels(["Chromosome 1"])
-    ax.legend()
-
-    def autolabel(rects,data):
-        """
-        Attach a text label above each bar displaying its height
-        """
-        c = 0
-        initial = 0.091
-        offset = 0.205
-        use_global_coordinate = False
-
-        if use_global_coordinate:
-            for i in data:        
-                ax.text(initial+offset*c, 0.05, str(i), horizontalalignment='center',
-                        verticalalignment='center', transform=ax.transAxes,fontsize=8)
-                c=c+1
-        else:
-            for rect,i in zip(rects,data):
-                height = rect.get_height()
-                ax.text(rect.get_x() + rect.get_width()/2., height, secondsToMinutes(i) ,ha='center', va='bottom')
+                print(f'Processing {fi}')
                 
-    autolabel(cpu, [df["cpu"][0]])
-    autolabel(gpu, [df["gpu"][0]])
+                if fi[-6:-4] == '16':
+                    temp = avg
+                    print("was 16, waiting")
+                elif fi[-5:-4] == '8':
+                    if 'times' in fi:
+                        times.append(avg)
+                        times.append(temp)
+                    else:
+                        scores.append(avg)
+                        scores.append(temp)
+                    
+                    print("was 8, writing both 8 and 16")
+                else:
+                    if 'times' in fi:
+                        times.append(avg)
+                    else:
+                        scores.append(avg)
+                    
+                    print("was 4")
 
-    plt.show()
+    f_times = open(path + "/times_turing.txt", 'w+')
+    f_scores = open(path + "/scores_turing.txt", 'w+')
+
+    header = '128_4,128_8,128_16,256_4,256_8,256_16,512_4,512_8,512_16\n'
+
+    f_times.write(header)
+    f_scores.write(header)
+
+    f_times.write(','.join(times))
+    f_scores.write(','.join(scores))
+
+    f_times.close()
+    f_scores.close()
+
+def stats(path: str):
+    for fi in os.listdir(path):
+        if ".txt" in fi:
+            with open(path + '/' + fi) as f:
+                values = [float(row) for row in f]
+                _min = min(values)
+                _max = max(values)
+                avg = np.mean(values)
+                stdev = np.std(values)
+
+                print(f"====== {fi} ========")
+                print(f"Min: {_min}, Max: {_max}, Mean: {avg}, Std dev: {stdev}")
+                print()
 
 def secondsToMinutes(sec: float):
     mins = math.floor(sec / 60)
@@ -91,7 +97,6 @@ def rmsd(file_1: str, file_2: str):
             rmsd = math.sqrt(sum(np.square([x - mean for x in values]) / len(values)))
             print(f"RMSD: {rmsd}")
 
-
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         test()
@@ -100,5 +105,6 @@ if __name__ == "__main__":
             bar_chart()
         else:
             stats(sys.argv[1])
+            # aggregate(sys.argv[1])
     else:
         rmsd(sys.argv[1], sys.argv[2])

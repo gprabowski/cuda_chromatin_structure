@@ -35,6 +35,11 @@ public:
 
 	static int loopDensity;
 
+	// cuda
+	static int milestoneFailsThreshold;
+	static int cudaBlocksMultiplier;
+	static int cudaThreadsPerBlock;
+
 	static std::string dataDirectory;
 	static std::string dataAnchors;
 	static std::string dataPetClusters;
