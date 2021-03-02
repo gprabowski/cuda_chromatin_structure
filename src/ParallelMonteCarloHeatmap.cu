@@ -39,19 +39,19 @@ struct __align__(8) half3{
     __half z;
 };
 
-__device__ void mutex_lock(unsigned int *mutex) {
-    unsigned int ns = 10;
-    while (atomicCAS(mutex, 0, 1) == 1) {
-        __nanosleep(ns);
-        if (ns < 256) {
-        ns *= 2;
-        }
-    }
-}
+// __device__ void mutex_lock(unsigned int *mutex) {
+//     unsigned int ns = 10;
+//     while (atomicCAS(mutex, 0, 1) == 1) {
+//         __nanosleep(ns);
+//         if (ns < 256) {
+//         ns *= 2;
+//         }
+//     }
+// }
 
-__device__ void mutex_unlock(unsigned int *mutex) {
-    atomicExch(mutex, 0);
-}
+// __device__ void mutex_unlock(unsigned int *mutex) {
+//     atomicExch(mutex, 0);
+// }
 
 __device__ int random(int range, curandState * state) {
 	return curand(state) % range;
@@ -226,7 +226,6 @@ __global__ void MonteCarloHeatmapKernel(
                     heatmap_dist, heatmapSize, heatmapDiagonalSize, activeRegionSize, chromosomeBoundariesSize, curr_vector, warpIdx);
 
             if((score_curr <= score_prev) || ( T > 0.0f && withChance(settings.tempJumpScaleHeatmap * expf(-settings.tempJumpCoefHeatmap * (score_curr * (1/score_prev)) * (1/T)), &localState))) {
-                // not thread safe, does it matter?
                 score_prev = score_curr;
                 continue;
             }

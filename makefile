@@ -18,8 +18,9 @@ CC_LIBS=
 ## NVCC COMPILER OPTIONS ##
 
 NVCC=nvcc
-NVCC_FLAGS= -arch=sm_75 --std c++17 --use_fast_math
-# NVCC_FLAGS= -arch=sm_80 --std c++17
+# NVCC_FLAGS= -arch=sm_60 --std c++17 --use_fast_math  # PASCAL
+NVCC_FLAGS= -arch=sm_75 --std c++17 --use_fast_math  # TURING
+# NVCC_FLAGS= -arch=sm_80 --std c++17 --use_fast_math  # AMPERE
 NVCC_LIBS=
 
 # CUDA library directory:
