@@ -1,5 +1,5 @@
 data/
 *.o
-bin/
 chr*/*
+genome/
 3dnome
